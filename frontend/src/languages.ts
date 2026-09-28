@@ -1,3 +1,5 @@
+export type Language = (typeof LANGUAGES)[number];
+
 export const LANGUAGES = [
   {
     id: "en",

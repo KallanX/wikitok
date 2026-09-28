@@ -1,6 +1,16 @@
 @import "tailwindcss";
 
-html, body {
+:root {
+  color-scheme: dark;
+}
+
+html, body, #root {
+  background-color: #000000;
+  color: #ffffff;
+  height: 100%;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 0;
   overscroll-behavior-y: contain;
   overflow: hidden;
 }
