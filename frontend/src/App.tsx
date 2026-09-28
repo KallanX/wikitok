@@ -109,7 +109,18 @@ function App() {
               A TikTok-style interface for exploring random Wikipedia articles.
             </p>
             <p className="text-white/70">
-              Made with ❤️ by{" "}
+              Maintained &amp; updated by{" "}
+              <a
+                href="https://github.com/KallanX"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white hover:underline"
+              >
+                KallanX
+              </a>
+            </p>
+            <p className="text-white/70 mt-2">
+              Originally created with ❤️ by{" "}
               <a
                 href="https://x.com/Aizkmusic"
                 target="_blank"
@@ -122,23 +133,33 @@ function App() {
             <p className="text-white/70 mt-2">
               Check out the code on{" "}
               <a
-                href="https://github.com/IsaacGemal/wikitok"
+                href="https://github.com/KallanX/wikitok"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-white hover:underline"
               >
                 GitHub
+              </a>{" "}
+              (forked from{" "}
+              <a
+                href="https://github.com/IsaacGemal/wikitok"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-white hover:underline"
+              >
+                IsaacGemal/wikitok
               </a>
+              )
             </p>
             <p className="text-white/70 mt-2">
-              If you enjoy this project, you can{" "}
+              Support the original creator on{" "}
               <a
                 href="https://buymeacoffee.com/aizk"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-white hover:underline"
               >
-                buy me a coffee
+                Buy Me a Coffee
               </a>
               ! ☕
             </p>
