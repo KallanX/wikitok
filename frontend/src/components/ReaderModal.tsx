@@ -13,21 +13,107 @@ import type { WikiArticle } from "./WikiCard";
 import { useLikedArticles } from "../contexts/LikedArticlesContext";
 import { useLocalization } from "../hooks/useLocalization";
 
-interface WikiPageExtract {
-  pageid?: number;
-  title?: string;
-  extract?: string;
-}
-
-interface WikiExtractQueryResponse {
-  query?: {
-    pages?: Record<string, WikiPageExtract>;
+interface WikiParseResponse {
+  parse?: {
+    title?: string;
+    pageid?: number;
+    text?: {
+      "*"?: string;
+    };
+  };
+  error?: {
+    code?: string;
+    info?: string;
   };
 }
 
 interface ReaderModalProps {
   article: WikiArticle;
   onClose: () => void;
+}
+
+// Clean and sanitize Wikipedia HTML to preserve all tables, bulleted lists, and media
+function cleanWikipediaHtml(rawHtml: string, articleUrl: string): string {
+  if (typeof DOMParser === "undefined") return rawHtml;
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(rawHtml, "text/html");
+
+  // Remove elements that don't belong in reader view
+  const selectorsToRemove = [
+    ".mw-editsection",
+    ".navbox",
+    ".vertical-navbox",
+    ".sidebar",
+    ".noprint",
+    ".metadata",
+    ".ambox",
+    ".tombstone",
+    ".mw-jump-link",
+    "style",
+    "link",
+    "script",
+  ];
+  selectorsToRemove.forEach((sel) => {
+    doc.querySelectorAll(sel).forEach((el) => el.remove());
+  });
+
+  // Extract base domain from article url or default to en.wikipedia.org
+  let domain = "https://en.wikipedia.org";
+  try {
+    const parsedUrl = new URL(articleUrl);
+    domain = `${parsedUrl.protocol}//${parsedUrl.host}`;
+  } catch {
+    // fallback
+  }
+
+  // Fix relative links to open Wikipedia externally in a new tab
+  doc.querySelectorAll("a").forEach((a) => {
+    const href = a.getAttribute("href");
+    if (href) {
+      if (href.startsWith("/wiki/") || href.startsWith("./")) {
+        const cleanHref = href.startsWith("./") ? href.slice(2) : href.slice(6);
+        a.setAttribute("href", `${domain}/wiki/${cleanHref}`);
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+      } else if (href.startsWith("#")) {
+        // internal anchors remain
+      } else if (href.startsWith("//")) {
+        a.setAttribute("href", `https:${href}`);
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+      } else if (href.startsWith("http")) {
+        a.setAttribute("target", "_blank");
+        a.setAttribute("rel", "noopener noreferrer");
+      }
+    }
+  });
+
+  // Fix protocol-relative images and set lazy loading
+  doc.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src");
+    if (src && src.startsWith("//")) {
+      img.setAttribute("src", `https:${src}`);
+    }
+    img.setAttribute("loading", "lazy");
+  });
+
+  // Wrap all tables in horizontal scroll containers to preserve columns on mobile
+  doc.querySelectorAll("table").forEach((tbl) => {
+    if (
+      tbl.parentElement &&
+      !tbl.parentElement.classList.contains("wiki-table-wrapper")
+    ) {
+      const wrapper = doc.createElement("div");
+      wrapper.className =
+        "wiki-table-wrapper overflow-x-auto my-4 rounded-xl border border-white/10 bg-white/[0.02]";
+      tbl.parentNode?.insertBefore(wrapper, tbl);
+      wrapper.appendChild(tbl);
+    }
+  });
+
+  const outputContainer = doc.querySelector(".mw-parser-output");
+  return outputContainer ? outputContainer.innerHTML : doc.body.innerHTML;
 }
 
 export function ReaderModal({ article, onClose }: ReaderModalProps) {
@@ -40,7 +126,7 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
 
   // Full article text expansion state
   const [isExpanded, setIsExpanded] = useState(false);
-  const [fullText, setFullText] = useState<string | null>(null);
+  const [fullHtml, setFullHtml] = useState<string | null>(null);
   const [loadingFullText, setLoadingFullText] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -200,9 +286,9 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
     }
   };
 
-  // Fetch full article text from Wikipedia
+  // Fetch full article content from Wikipedia including all tables and lists
   const fetchFullArticle = async () => {
-    if (fullText) {
+    if (fullHtml) {
       setIsExpanded(true);
       return;
     }
@@ -213,52 +299,43 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
     try {
       const apiBase =
         currentLanguage?.api || "https://en.wikipedia.org/w/api.php?";
-      let text = "";
+      let rawHtml = "";
 
-      // 1. Try querying by pageid
+      // 1. Try querying by pageid using parse API for complete article content
       if (article.pageid) {
         const params = new URLSearchParams({
-          action: "query",
+          action: "parse",
           format: "json",
-          prop: "extracts",
-          explaintext: "1",
-          redirects: "1",
+          prop: "text",
           origin: "*",
-          pageids: String(article.pageid),
+          pageid: String(article.pageid),
         });
         const res = await fetch(`${apiBase}${params.toString()}`);
-        const data = (await res.json()) as WikiExtractQueryResponse;
-        if (data?.query?.pages) {
-          const pages = Object.values(data.query.pages);
-          if (pages.length > 0 && pages[0]?.extract) {
-            text = pages[0].extract;
-          }
+        const data = (await res.json()) as WikiParseResponse;
+        if (data?.parse?.text?.["*"]) {
+          rawHtml = data.parse.text["*"];
         }
       }
 
       // 2. Fallback to title if needed
-      if (!text && article.title) {
+      if (!rawHtml && article.title) {
         const params = new URLSearchParams({
-          action: "query",
+          action: "parse",
           format: "json",
-          prop: "extracts",
-          explaintext: "1",
-          redirects: "1",
+          prop: "text",
           origin: "*",
-          titles: article.title,
+          page: article.title,
         });
         const res = await fetch(`${apiBase}${params.toString()}`);
-        const data = (await res.json()) as WikiExtractQueryResponse;
-        if (data?.query?.pages) {
-          const pages = Object.values(data.query.pages);
-          if (pages.length > 0 && pages[0]?.extract) {
-            text = pages[0].extract;
-          }
+        const data = (await res.json()) as WikiParseResponse;
+        if (data?.parse?.text?.["*"]) {
+          rawHtml = data.parse.text["*"];
         }
       }
 
-      if (text && text.trim().length > 0) {
-        setFullText(text);
+      if (rawHtml && rawHtml.trim().length > 0) {
+        const cleaned = cleanWikipediaHtml(rawHtml, article.url);
+        setFullHtml(cleaned);
         setIsExpanded(true);
       } else {
         setLoadError(
@@ -284,31 +361,6 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
           .filter((p) => p.trim().length > 0)
       : [];
   }, [article.extract]);
-
-  // Parse expanded full text into headings and paragraphs
-  const parsedFullTextBlocks = useMemo(() => {
-    if (!fullText) return [];
-    const lines = fullText
-      .split("\n")
-      .map((l) => l.trim())
-      .filter(Boolean);
-
-    return lines.map((line, idx) => {
-      const h4Match = line.match(/^====\s*(.+?)\s*====$/);
-      if (h4Match) {
-        return { id: idx, type: "h4" as const, text: h4Match[1] };
-      }
-      const h3Match = line.match(/^===\s*(.+?)\s*===$/);
-      if (h3Match) {
-        return { id: idx, type: "h3" as const, text: h3Match[1] };
-      }
-      const h2Match = line.match(/^==\s*(.+?)\s*==$/);
-      if (h2Match) {
-        return { id: idx, type: "h2" as const, text: h2Match[1] };
-      }
-      return { id: idx, type: "p" as const, text: line };
-    });
-  }, [fullText]);
 
   const sheetStyle: React.CSSProperties = {
     ...(isDragging
@@ -462,7 +514,7 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
           </h1>
 
           {/* Expanded full article vs Initial summary extract */}
-          {isExpanded && parsedFullTextBlocks.length > 0 ? (
+          {isExpanded && fullHtml ? (
             <div className="space-y-4">
               <div className="flex items-center justify-between pb-3 border-b border-white/10 text-xs text-white/60">
                 <span className="flex items-center gap-1.5 text-blue-400 font-medium">
@@ -479,46 +531,11 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
                 </button>
               </div>
 
-              {parsedFullTextBlocks.map((block) => {
-                if (block.type === "h2") {
-                  return (
-                    <h2
-                      key={block.id}
-                      className="text-xl md:text-2xl font-bold text-white pt-6 pb-2 border-b border-white/10 tracking-tight"
-                    >
-                      {block.text}
-                    </h2>
-                  );
-                }
-                if (block.type === "h3") {
-                  return (
-                    <h3
-                      key={block.id}
-                      className="text-lg md:text-xl font-semibold text-blue-200 pt-4 pb-1 tracking-tight"
-                    >
-                      {block.text}
-                    </h3>
-                  );
-                }
-                if (block.type === "h4") {
-                  return (
-                    <h4
-                      key={block.id}
-                      className="text-base md:text-lg font-medium text-blue-300 pt-3 pb-1"
-                    >
-                      {block.text}
-                    </h4>
-                  );
-                }
-                return (
-                  <p
-                    key={block.id}
-                    className="text-base md:text-lg leading-relaxed text-gray-200"
-                  >
-                    {block.text}
-                  </p>
-                );
-              })}
+              {/* Render rich sanitized Wikipedia HTML with tables, lists, and formatting */}
+              <div
+                className="wiki-content space-y-4"
+                dangerouslySetInnerHTML={{ __html: fullHtml }}
+              />
 
               <div className="pt-4 flex justify-center">
                 <button
@@ -526,7 +543,10 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
                   onClick={() => {
                     setIsExpanded(false);
                     if (contentRef.current) {
-                      contentRef.current.scrollTo({ top: 0, behavior: "smooth" });
+                      contentRef.current.scrollTo({
+                        top: 0,
+                        behavior: "smooth",
+                      });
                     }
                   }}
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-white/70 hover:text-white text-xs font-medium transition-colors cursor-pointer"

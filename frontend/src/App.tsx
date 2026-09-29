@@ -253,7 +253,12 @@ function App() {
             >
               <X className="w-5 h-5" />
             </button>
-            <h2 className="text-xl md:text-2xl font-bold mb-3">About WikiTok</h2>
+            <div className="flex items-center gap-2.5 mb-3 pr-8">
+              <h2 className="text-xl md:text-2xl font-bold">About WikiTok</h2>
+              <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono font-medium tracking-wide">
+                v1.2.0
+              </span>
+            </div>
             <p className="text-gray-300 text-sm md:text-base mb-4 leading-relaxed">
               A TikTok-style vertical feed for discovering and exploring random
               Wikipedia articles in multiple languages.
