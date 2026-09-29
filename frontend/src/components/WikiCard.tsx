@@ -191,8 +191,8 @@ export function WikiCard({ article }: WikiCardProps) {
         </div>
       ))}
 
-      {/* 3. Foreground Image Container (Uncropped, aspect-ratio preserved) */}
-      <div className="flex-1 w-full flex items-center justify-center pt-16 pb-[38vh] md:pb-[32vh] px-4 md:px-8 z-10">
+      {/* 3. Foreground Image Container (Uncropped, aspect-ratio preserved, lowered and centered) */}
+      <div className="flex-1 w-full flex items-center justify-center pt-28 sm:pt-24 md:pt-20 pb-[28vh] sm:pb-[26vh] md:pb-[22vh] px-4 md:px-8 z-10">
         {article.thumbnail ? (
           <div
             className="relative max-h-full max-w-full group cursor-zoom-in"
@@ -205,7 +205,7 @@ export function WikiCard({ article }: WikiCardProps) {
               loading="lazy"
               src={article.thumbnail.source}
               alt={article.displaytitle}
-              className={`max-h-[48vh] md:max-h-[55vh] w-auto max-w-full object-contain rounded-2xl shadow-2xl transition-all duration-500 group-hover:scale-[1.02] ${
+              className={`max-h-[42vh] sm:max-h-[46vh] md:max-h-[52vh] w-auto max-w-full object-contain rounded-2xl shadow-2xl transition-all duration-500 group-hover:scale-[1.02] ${
                 imageLoaded ? "opacity-100" : "opacity-0"
               }`}
               onLoad={() => setImageLoaded(true)}
@@ -213,7 +213,7 @@ export function WikiCard({ article }: WikiCardProps) {
             />
 
             {!imageLoaded && (
-              <div className="w-64 h-64 md:w-80 md:h-80 bg-white/5 rounded-2xl animate-pulse flex items-center justify-center">
+              <div className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 bg-white/5 rounded-2xl animate-pulse flex items-center justify-center">
                 <Loader2 className="w-8 h-8 text-white/30 animate-spin" />
               </div>
             )}
@@ -224,7 +224,7 @@ export function WikiCard({ article }: WikiCardProps) {
             </div>
           </div>
         ) : (
-          <div className="w-64 h-64 rounded-2xl bg-white/5 flex items-center justify-center text-white/40 text-sm">
+          <div className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 rounded-2xl bg-white/5 flex items-center justify-center text-white/40 text-sm">
             <span>No image available</span>
           </div>
         )}
