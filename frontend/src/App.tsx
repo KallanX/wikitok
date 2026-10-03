@@ -53,7 +53,7 @@ function App() {
   useEffect(() => {
     const observer = new IntersectionObserver(handleObserver, {
       threshold: 0.1,
-      rootMargin: "300px",
+      rootMargin: "1200px",
     });
 
     if (observerTarget.current) {
@@ -62,6 +62,13 @@ function App() {
 
     return () => observer.disconnect();
   }, [handleObserver]);
+
+  // Proactively fetch more articles when user is within 4 articles of the end
+  useEffect(() => {
+    if (articles.length > 0 && activeArticleIndex >= articles.length - 4) {
+      fetchArticles();
+    }
+  }, [activeArticleIndex, articles.length, fetchArticles]);
 
   // Track active article index and scroll position
   const handleScroll = () => {

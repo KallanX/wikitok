@@ -4,14 +4,99 @@ import fs from "node:fs";
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const DIST_DIR = path.resolve(process.env.DIST_DIR || "./dist");
+const RATE_LIMIT_PER_MINUTE = Number(process.env.RATE_LIMIT_PER_MINUTE) || 120;
+const CORS_ORIGIN = process.env.CORS_ORIGIN || "";
 
-// Security response headers applied to all responses
+// Content Security Policy tailored for WikiTok SPA & Wikipedia media/data APIs
+const CSP_DIRECTIVES = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https://*.wikimedia.org https://*.wikipedia.org https://upload.wikimedia.org",
+  "connect-src 'self' https://*.wikipedia.org https://*.wikimedia.org",
+  "font-src 'self' data:",
+  "media-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+  "upgrade-insecure-requests",
+].join("; ");
+
+// Comprehensive modern security response headers applied to all responses
 const BASE_SECURITY_HEADERS: Record<string, string> = {
+  "Content-Security-Policy": CSP_DIRECTIVES,
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
   "X-Content-Type-Options": "nosniff",
   "X-Frame-Options": "SAMEORIGIN",
   "Referrer-Policy": "strict-origin-when-cross-origin",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+  "Cross-Origin-Opener-Policy": "same-origin",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Permissions-Policy":
+    "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
 };
+
+// Sensitive file extension probes commonly targeted by scanners (inspired by crossword-hub)
+const SENSITIVE_EXTENSIONS_REGEX =
+  /\.(env|git|bak|old|save|php|axd|properties|sql|ini|sh|action|application|yaml|yml|conf|config|key|pem|crt)$/i;
+
+// In-memory sliding window rate limiter
+interface RateLimitRecord {
+  count: number;
+  resetAt: number;
+}
+const rateLimitMap = new Map<string, RateLimitRecord>();
+
+// Periodic cleanup of expired rate limit entries every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, record] of rateLimitMap.entries()) {
+    if (now > record.resetAt) {
+      rateLimitMap.delete(ip);
+    }
+  }
+}, 5 * 60 * 1000);
+
+interface BunServerLike {
+  requestIP?: (req: Request) => { address?: string } | null;
+}
+
+function getClientIp(req: Request, serverInstance?: BunServerLike): string {
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    // Leftmost address is the client address when behind reverse proxies
+    const firstIp = forwarded.split(",")[0].trim();
+    if (firstIp) return firstIp;
+  }
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp) return realIp.trim();
+
+  try {
+    const ip = serverInstance?.requestIP?.(req)?.address;
+    if (ip) return ip;
+  } catch {
+    // fallback
+  }
+  return "127.0.0.1";
+}
+
+function checkRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const windowMs = 60 * 1000;
+  const existing = rateLimitMap.get(ip);
+
+  if (!existing || now > existing.resetAt) {
+    rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+
+  if (existing.count >= RATE_LIMIT_PER_MINUTE) {
+    return false;
+  }
+
+  existing.count += 1;
+  return true;
+}
 
 interface StaticEntry {
   file: ReturnType<typeof Bun.file>;
@@ -68,7 +153,31 @@ const server = Bun.serve({
   port: PORT,
   hostname: HOST,
   fetch(req) {
-    // Only allow GET and HEAD requests for static hosting
+    const url = new URL(req.url);
+
+    // 1. Health check endpoint for Docker and load balancers
+    if (url.pathname === "/health" || url.pathname === "/healthz") {
+      return new Response("OK", {
+        status: 200,
+        headers: {
+          ...BASE_SECURITY_HEADERS,
+          "Content-Type": "text/plain; charset=utf-8",
+        },
+      });
+    }
+
+    // 2. Allow CORS preflight if CORS_ORIGIN is explicitly configured
+    if (req.method === "OPTIONS") {
+      const headers = new Headers(BASE_SECURITY_HEADERS);
+      if (CORS_ORIGIN) {
+        headers.set("Access-Control-Allow-Origin", CORS_ORIGIN);
+        headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+        headers.set("Access-Control-Allow-Headers", "Content-Type");
+      }
+      return new Response(null, { status: 204, headers });
+    }
+
+    // 3. Only allow safe GET and HEAD requests for static hosting
     if (req.method !== "GET" && req.method !== "HEAD") {
       return new Response("Method Not Allowed", {
         status: 405,
@@ -76,14 +185,22 @@ const server = Bun.serve({
       });
     }
 
-    const url = new URL(req.url);
+    // 4. URL length limit to prevent buffer/fuzzing overflow attempts
+    if (req.url.length > 2048) {
+      return new Response("URI Too Long", {
+        status: 414,
+        headers: BASE_SECURITY_HEADERS,
+      });
+    }
 
-    // Health check endpoint for Docker and load balancers
-    if (url.pathname === "/health" || url.pathname === "/healthz") {
-      return new Response("OK", {
-        status: 200,
+    // 5. Rate limiting perimeter
+    const clientIp = getClientIp(req, server);
+    if (!checkRateLimit(clientIp)) {
+      return new Response("Too Many Requests", {
+        status: 429,
         headers: {
           ...BASE_SECURITY_HEADERS,
+          "Retry-After": "60",
           "Content-Type": "text/plain; charset=utf-8",
         },
       });
@@ -99,20 +216,55 @@ const server = Bun.serve({
       });
     }
 
-    if (pathname === "/") {
-      pathname = "/index.html";
-    }
-
-    // 1. Check if the exact requested file is in our pre-indexed static map
-    const entry = staticFiles.get(pathname);
-    if (entry) {
-      return new Response(req.method === "HEAD" ? null : entry.file, {
-        headers: entry.headers,
+    // 6. Perimeter defense: Reject hidden dotfiles or directories (.env, .git, etc.)
+    const segments = pathname.split("/");
+    const hasDotfileSegment = segments.some(
+      (segment) =>
+        segment.startsWith(".") &&
+        segment !== "." &&
+        segment !== ".." &&
+        segment !== ".well-known"
+    );
+    if (hasDotfileSegment) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: BASE_SECURITY_HEADERS,
       });
     }
 
-    // 2. If a specific file was requested (has extension) but doesn't exist -> 404
-    const hasExtension = path.extname(pathname) !== "";
+    // 7. Perimeter defense: Block probing for sensitive extensions (.env, .git, .bak, .php, etc.)
+    if (SENSITIVE_EXTENSIONS_REGEX.test(pathname)) {
+      return new Response("Not Found", {
+        status: 404,
+        headers: BASE_SECURITY_HEADERS,
+      });
+    }
+
+    // 8. Canonical path traversal defense
+    const normalized = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+    if (normalized.includes("..")) {
+      return new Response("Forbidden", {
+        status: 403,
+        headers: BASE_SECURITY_HEADERS,
+      });
+    }
+
+    const lookupPath = pathname === "/" ? "/index.html" : pathname;
+
+    // 9. Check if exact requested file is in our pre-indexed static map
+    const entry = staticFiles.get(lookupPath);
+    if (entry) {
+      const responseHeaders = new Headers(entry.headers);
+      if (CORS_ORIGIN) {
+        responseHeaders.set("Access-Control-Allow-Origin", CORS_ORIGIN);
+      }
+      return new Response(req.method === "HEAD" ? null : entry.file, {
+        headers: responseHeaders,
+      });
+    }
+
+    // 10. If a specific file with extension was requested but doesn't exist -> 404
+    const hasExtension = path.extname(lookupPath) !== "";
     if (hasExtension) {
       return new Response("Not Found", {
         status: 404,
@@ -120,10 +272,14 @@ const server = Bun.serve({
       });
     }
 
-    // 3. SPA Fallback: serve index.html for navigation routes
+    // 11. SPA Fallback: serve index.html for client-side navigation routes
     if (indexEntry) {
+      const responseHeaders = new Headers(indexEntry.headers);
+      if (CORS_ORIGIN) {
+        responseHeaders.set("Access-Control-Allow-Origin", CORS_ORIGIN);
+      }
       return new Response(req.method === "HEAD" ? null : indexEntry.file, {
-        headers: indexEntry.headers,
+        headers: responseHeaders,
       });
     }
 
@@ -135,5 +291,5 @@ const server = Bun.serve({
 });
 
 console.log(
-  `WikiTok server running on http://${HOST}:${PORT} (${staticFiles.size} static files indexed)`
+  `WikiTok hardened server running on http://${HOST}:${PORT} (${staticFiles.size} static files indexed, rate limit: ${RATE_LIMIT_PER_MINUTE} req/min)`
 );

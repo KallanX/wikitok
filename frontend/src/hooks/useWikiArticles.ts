@@ -18,12 +18,27 @@ const preloadImage = (src: string, timeoutMs = 3000): Promise<void> => {
   });
 };
 
+interface RawWikiPage {
+  title: string;
+  varianttitles?: Record<string, string>;
+  extract?: string;
+  pageid: number;
+  thumbnail?: {
+    source: string;
+    width: number;
+    height: number;
+  };
+  canonicalurl?: string;
+}
+
 export function useWikiArticles() {
   const [articles, setArticles] = useState<WikiArticle[]>([]);
   const [loading, setLoading] = useState(false);
   const [topic, setTopic] = useState<string>("all");
   const buffer = useRef<WikiArticle[]>([]);
   const seenPageIds = useRef<Set<number>>(new Set());
+  const isFetchingMain = useRef(false);
+  const isPrefetching = useRef(false);
   const { currentLanguage } = useLocalization();
 
   // Reset feed when language or topic changes
@@ -31,12 +46,20 @@ export function useWikiArticles() {
     setArticles([]);
     buffer.current = [];
     seenPageIds.current.clear();
+    isFetchingMain.current = false;
+    isPrefetching.current = false;
   }, []);
 
   const fetchArticles = useCallback(
     async (isPrefetch = false) => {
-      if (loading && !isPrefetch) return;
-      setLoading(true);
+      if (isPrefetch) {
+        if (isPrefetching.current) return;
+        isPrefetching.current = true;
+      } else {
+        if (isFetchingMain.current) return;
+        isFetchingMain.current = true;
+        setLoading(true);
+      }
 
       try {
         const params: Record<string, string> = {
@@ -73,10 +96,10 @@ export function useWikiArticles() {
         const data = await response.json();
 
         if (data?.query?.pages) {
-          const rawPages = Object.values(data.query.pages) as any[];
+          const rawPages = Object.values(data.query.pages) as RawWikiPage[];
 
           const parsedArticles: WikiArticle[] = rawPages
-            .map((page: any): WikiArticle => ({
+            .map((page: RawWikiPage): WikiArticle => ({
               title: page.title,
               displaytitle:
                 page.varianttitles?.[currentLanguage.id] ||
@@ -84,7 +107,7 @@ export function useWikiArticles() {
                 "Untitled",
               extract: page.extract || "",
               pageid: page.pageid,
-              thumbnail: page.thumbnail,
+              thumbnail: page.thumbnail as WikiArticle["thumbnail"],
               url:
                 page.canonicalurl ||
                 `${currentLanguage.article}${encodeURIComponent(page.title)}`,
@@ -103,29 +126,38 @@ export function useWikiArticles() {
             seenPageIds.current.add(article.pageid);
           });
 
-          // Preload images with resilient timeout
-          await Promise.allSettled(
-            parsedArticles.map((article) =>
-              preloadImage(article.thumbnail!.source)
-            )
-          );
+          // Non-blocking background image warmup for upcoming items
+          parsedArticles.slice(0, 6).forEach((article) => {
+            if (article.thumbnail?.source) {
+              preloadImage(article.thumbnail.source).catch(() => {});
+            }
+          });
 
           if (isPrefetch) {
             buffer.current = [...buffer.current, ...parsedArticles];
           } else {
             setArticles((prev) => [...prev, ...parsedArticles]);
+            // Instantly start background prefetch for the buffer
+            setTimeout(() => {
+              fetchArticles(true);
+            }, 60);
           }
         }
       } catch (error) {
         console.error("Error fetching Wikipedia articles:", error);
       } finally {
-        setLoading(false);
+        if (isPrefetch) {
+          isPrefetching.current = false;
+        } else {
+          isFetchingMain.current = false;
+          setLoading(false);
+        }
       }
     },
-    [currentLanguage, topic, loading]
+    [currentLanguage, topic]
   );
 
-  // When buffer has items, quickly append them and trigger background fetch
+  // When buffer has items, instantly append them (0ms delay) and trigger background refill
   const getMoreArticles = useCallback(() => {
     if (buffer.current.length > 0) {
       const nextBatch = buffer.current;
@@ -141,7 +173,7 @@ export function useWikiArticles() {
   useEffect(() => {
     resetFeed();
     fetchArticles(false);
-  }, [currentLanguage.id, topic]);
+  }, [currentLanguage.id, topic, fetchArticles, resetFeed]);
 
   return {
     articles,

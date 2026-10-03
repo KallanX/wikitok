@@ -32,15 +32,31 @@ interface ReaderModalProps {
   onClose: () => void;
 }
 
-// Clean and sanitize Wikipedia HTML to preserve all tables, bulleted lists, and media
+// Clean and sanitize Wikipedia HTML to preserve tables, lists, and media while neutralizing XSS vectors
 function cleanWikipediaHtml(rawHtml: string, articleUrl: string): string {
-  if (typeof DOMParser === "undefined") return rawHtml;
+  if (typeof DOMParser === "undefined") return "";
 
   const parser = new DOMParser();
   const doc = parser.parseFromString(rawHtml, "text/html");
 
-  // Remove elements that don't belong in reader view
+  // 1. Remove dangerous active elements and non-reader elements
   const selectorsToRemove = [
+    "script",
+    "style",
+    "link",
+    "iframe",
+    "frame",
+    "frameset",
+    "object",
+    "embed",
+    "applet",
+    "form",
+    "input",
+    "button",
+    "select",
+    "textarea",
+    "meta",
+    "base",
     ".mw-editsection",
     ".navbox",
     ".vertical-navbox",
@@ -50,15 +66,22 @@ function cleanWikipediaHtml(rawHtml: string, articleUrl: string): string {
     ".ambox",
     ".tombstone",
     ".mw-jump-link",
-    "style",
-    "link",
-    "script",
   ];
   selectorsToRemove.forEach((sel) => {
     doc.querySelectorAll(sel).forEach((el) => el.remove());
   });
 
-  // Extract base domain from article url or default to en.wikipedia.org
+  // 2. Strip all inline event handlers (e.g. onclick, onerror, onload) across all elements
+  doc.querySelectorAll("*").forEach((el) => {
+    for (let i = el.attributes.length - 1; i >= 0; i--) {
+      const attr = el.attributes[i];
+      if (attr.name.toLowerCase().startsWith("on")) {
+        el.removeAttribute(attr.name);
+      }
+    }
+  });
+
+  // 3. Extract base domain from article url or default to en.wikipedia.org
   let domain = "https://en.wikipedia.org";
   try {
     const parsedUrl = new URL(articleUrl);
@@ -67,10 +90,21 @@ function cleanWikipediaHtml(rawHtml: string, articleUrl: string): string {
     // fallback
   }
 
-  // Fix relative links to open Wikipedia externally in a new tab
+  // 4. Sanitize and rewrite links to safe targets
   doc.querySelectorAll("a").forEach((a) => {
-    const href = a.getAttribute("href");
+    const href = a.getAttribute("href")?.trim();
     if (href) {
+      const lowerHref = href.toLowerCase();
+      // Block unsafe protocols (javascript:, data:, vbscript:)
+      if (
+        lowerHref.startsWith("javascript:") ||
+        lowerHref.startsWith("data:") ||
+        lowerHref.startsWith("vbscript:")
+      ) {
+        a.removeAttribute("href");
+        return;
+      }
+
       if (href.startsWith("/wiki/") || href.startsWith("./")) {
         const cleanHref = href.startsWith("./") ? href.slice(2) : href.slice(6);
         a.setAttribute("href", `${domain}/wiki/${cleanHref}`);
@@ -82,23 +116,32 @@ function cleanWikipediaHtml(rawHtml: string, articleUrl: string): string {
         a.setAttribute("href", `https:${href}`);
         a.setAttribute("target", "_blank");
         a.setAttribute("rel", "noopener noreferrer");
-      } else if (href.startsWith("http")) {
+      } else if (href.startsWith("http://") || href.startsWith("https://")) {
         a.setAttribute("target", "_blank");
         a.setAttribute("rel", "noopener noreferrer");
+      } else {
+        a.removeAttribute("href");
       }
     }
   });
 
-  // Fix protocol-relative images and set lazy loading
+  // 5. Sanitize and rewrite image sources
   doc.querySelectorAll("img").forEach((img) => {
-    const src = img.getAttribute("src");
-    if (src && src.startsWith("//")) {
-      img.setAttribute("src", `https:${src}`);
+    const src = img.getAttribute("src")?.trim();
+    if (src) {
+      const lowerSrc = src.toLowerCase();
+      if (lowerSrc.startsWith("javascript:") || lowerSrc.startsWith("vbscript:")) {
+        img.remove();
+        return;
+      }
+      if (src.startsWith("//")) {
+        img.setAttribute("src", `https:${src}`);
+      }
     }
     img.setAttribute("loading", "lazy");
   });
 
-  // Wrap all tables in horizontal scroll containers to preserve columns on mobile
+  // 6. Wrap all tables in horizontal scroll containers to preserve columns on mobile
   doc.querySelectorAll("table").forEach((tbl) => {
     if (
       tbl.parentElement &&
