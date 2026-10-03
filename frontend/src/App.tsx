@@ -35,25 +35,25 @@ function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
 
-  const { articles, loading, topic, setTopic, fetchArticles } =
+  const { articles, loading, isFetchingMore, topic, setTopic, fetchArticles } =
     useWikiArticles();
   const { likedArticles, toggleLike } = useLikedArticles();
 
-  // Intersection observer to automatically fetch more articles when nearing the end
+  // Intersection observer as an eager fallback (2500px ahead)
   const handleObserver = useCallback(
     (entries: IntersectionObserverEntry[]) => {
       const [target] = entries;
-      if (target.isIntersecting && !loading) {
+      if (target.isIntersecting) {
         fetchArticles();
       }
     },
-    [loading, fetchArticles]
+    [fetchArticles]
   );
 
   useEffect(() => {
     const observer = new IntersectionObserver(handleObserver, {
-      threshold: 0.1,
-      rootMargin: "1200px",
+      threshold: 0.05,
+      rootMargin: "2500px",
     });
 
     if (observerTarget.current) {
@@ -63,9 +63,9 @@ function App() {
     return () => observer.disconnect();
   }, [handleObserver]);
 
-  // Proactively fetch more articles when user is within 4 articles of the end
+  // High-water mark replenishment: fetch whenever remaining articles ahead is 15 or fewer
   useEffect(() => {
-    if (articles.length > 0 && activeArticleIndex >= articles.length - 4) {
+    if (articles.length > 0 && articles.length - activeArticleIndex <= 15) {
       fetchArticles();
     }
   }, [activeArticleIndex, articles.length, fetchArticles]);
@@ -459,6 +459,16 @@ function App() {
 
       {/* Infinite Scroll Sentinel */}
       <div ref={observerTarget} className="h-10 -mt-1" />
+
+      {/* End-of-feed replenishment indicator card */}
+      {isFetchingMore && articles.length > 0 && (
+        <div className="h-[100dvh] min-h-[100dvh] w-full flex flex-col items-center justify-center gap-3 text-white/70 snap-start bg-black">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
+          <span className="text-xs uppercase tracking-wider font-semibold text-white/50">
+            Loading more articles...
+          </span>
+        </div>
+      )}
 
       {/* Loading Spinner */}
       {loading && articles.length === 0 && (
