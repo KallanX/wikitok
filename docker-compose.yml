@@ -7,9 +7,19 @@ services:
     restart: unless-stopped
     ports:
       - "${BIND_IP:-0.0.0.0}:${PORT:-3000}:3000"
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
     environment:
+      - NODE_ENV=production
       - PORT=3000
       - HOST=0.0.0.0
+      # Trusted proxy configuration for reverse proxy / load balancer setups
+      - TRUST_PROXY=${TRUST_PROXY:-loopback, linklocal, uniquelocal}
+      # Allowed CORS origins (leave unset or empty for same-origin only)
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
+      # Rate limit in requests per minute per IP
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-120}
     # Security hardening for public internet exposure
     read_only: true
     tmpfs:

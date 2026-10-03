@@ -39,7 +39,7 @@ interface FloatingHeart {
   y: number;
 }
 
-export function WikiCard({ article }: WikiCardProps) {
+export function WikiCard({ article, isActive }: WikiCardProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [showLightbox, setShowLightbox] = useState(false);
@@ -124,6 +124,11 @@ export function WikiCard({ article }: WikiCardProps) {
     }
   };
 
+  // Reset imageLoaded state when article thumbnail changes
+  useEffect(() => {
+    setImageLoaded(false);
+  }, [article.thumbnail?.source]);
+
   // Touch gesture handler for mobile double tap
   const handleTouchEnd = (e: React.TouchEvent) => {
     const now = Date.now();
@@ -158,7 +163,7 @@ export function WikiCard({ article }: WikiCardProps) {
   return (
     <div
       ref={cardRef}
-      className="h-[100dvh] min-h-[100dvh] w-full flex flex-col justify-between snap-start relative overflow-hidden bg-black select-none"
+      className="h-[100dvh] min-h-[100dvh] w-full flex flex-col justify-between snap-start relative overflow-hidden bg-black select-none pt-26 sm:pt-20 md:pt-18"
       onDoubleClick={(e) => handleDoubleTap(e.clientX, e.clientY)}
       onTouchEnd={handleTouchEnd}
     >
@@ -191,55 +196,72 @@ export function WikiCard({ article }: WikiCardProps) {
         </div>
       ))}
 
-      {/* 3. Foreground Image Container (Uncropped, aspect-ratio preserved, lowered and centered) */}
-      <div className="flex-1 w-full flex items-center justify-center pt-28 sm:pt-24 md:pt-20 pb-[28vh] sm:pb-[26vh] md:pb-[22vh] px-4 md:px-8 z-10">
+      {/* 3. Foreground Image Container: Flexes strictly between category bar and article text */}
+      <div className="flex-1 min-h-0 w-full flex items-center justify-center px-4 md:px-8 py-2 relative z-10 overflow-hidden">
         {article.thumbnail ? (
           <div
-            className="relative max-h-full max-w-full group cursor-zoom-in"
+            className="relative max-h-full max-w-full flex items-center justify-center group cursor-zoom-in"
             onClick={(e) => {
               e.stopPropagation();
               setShowLightbox(true);
             }}
           >
+            {/* Loading placeholder: stays centered and matches aspect ratio */}
+            {!imageLoaded && (
+              <div
+                style={
+                  article.thumbnail.width && article.thumbnail.height
+                    ? {
+                        aspectRatio: `${article.thumbnail.width} / ${article.thumbnail.height}`,
+                      }
+                    : undefined
+                }
+                className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 max-h-full max-w-full bg-white/5 border border-white/5 rounded-2xl animate-pulse flex items-center justify-center"
+              >
+                <Loader2 className="w-8 h-8 text-white/30 animate-spin" />
+              </div>
+            )}
+
+            {/* Responsive image: dynamically constrained to avoid overflowing into text */}
             <img
-              loading="lazy"
+              loading={isActive ? "eager" : "lazy"}
+              fetchPriority={isActive ? "high" : "auto"}
               src={article.thumbnail.source}
               alt={article.displaytitle}
-              className={`max-h-[42vh] sm:max-h-[46vh] md:max-h-[52vh] w-auto max-w-full object-contain rounded-2xl shadow-2xl transition-all duration-500 group-hover:scale-[1.02] ${
-                imageLoaded ? "opacity-100" : "opacity-0"
+              className={`max-h-full max-w-full w-auto object-contain rounded-2xl shadow-2xl transition-all duration-500 group-hover:scale-[1.02] ${
+                imageLoaded
+                  ? "opacity-100 relative"
+                  : "opacity-0 absolute pointer-events-none"
               }`}
               onLoad={() => setImageLoaded(true)}
               onError={() => setImageLoaded(true)}
             />
 
-            {!imageLoaded && (
-              <div className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 bg-white/5 rounded-2xl animate-pulse flex items-center justify-center">
-                <Loader2 className="w-8 h-8 text-white/30 animate-spin" />
+            {/* Tap to zoom badge */}
+            {imageLoaded && (
+              <div className="absolute bottom-3 right-3 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white/70 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                <Maximize2 className="w-4 h-4" />
               </div>
             )}
-
-            {/* Tap to zoom badge */}
-            <div className="absolute bottom-3 right-3 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white/70 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-              <Maximize2 className="w-4 h-4" />
-            </div>
           </div>
         ) : (
-          <div className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 rounded-2xl bg-white/5 flex items-center justify-center text-white/40 text-sm">
+          <div className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-center text-white/40 text-sm">
             <span>No image available</span>
           </div>
         )}
       </div>
 
-      {/* 4. Article Information & Action Sheet */}
-      <div className="absolute bottom-0 left-0 right-0 p-6 md:p-8 pb-[max(1.5rem,env(safe-area-inset-bottom,1.5rem))] text-white z-20 bg-gradient-to-t from-black via-black/95 to-transparent pt-16">
-        <div className="max-w-2xl mx-auto">
+      {/* 4. Article Information & Action Sheet in layout flow */}
+      <div className="flex-shrink-0 w-full relative z-20 pb-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] px-4 sm:px-6 md:px-8 pt-6 bg-gradient-to-t from-black via-black/95 to-black/40">
+        <div className="absolute -top-10 left-0 right-0 h-10 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
+        <div className="max-w-2xl mx-auto relative z-10">
           {/* Header Row: Title & Action Buttons */}
-          <div className="flex justify-between items-start mb-3 gap-4">
+          <div className="flex justify-between items-start mb-2.5 gap-4">
             <button
               onClick={() => setShowReader(true)}
-              className="text-left group/title hover:opacity-90 transition-opacity"
+              className="text-left group/title hover:opacity-90 transition-opacity min-w-0"
             >
-              <h2 className="text-2xl md:text-3xl font-extrabold tracking-tight drop-shadow-md text-white group-hover/title:text-blue-300 transition-colors">
+              <h2 className="text-xl sm:text-2xl md:text-3xl font-extrabold tracking-tight drop-shadow-md text-white group-hover/title:text-blue-300 transition-colors line-clamp-2">
                 {article.displaytitle}
               </h2>
             </button>
@@ -296,7 +318,7 @@ export function WikiCard({ article }: WikiCardProps) {
           </div>
 
           {/* Extract text preview */}
-          <p className="text-gray-200 text-sm md:text-base mb-4 drop-shadow line-clamp-4 md:line-clamp-5 leading-relaxed">
+          <p className="text-gray-200 text-xs sm:text-sm md:text-base mb-3 drop-shadow line-clamp-3 sm:line-clamp-4 leading-relaxed">
             {article.extract}
           </p>
 
