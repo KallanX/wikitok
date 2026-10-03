@@ -12,7 +12,7 @@ const CSP_DIRECTIVES = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.wikimedia.org https://*.wikipedia.org https://upload.wikimedia.org",
+  "img-src 'self' data: blob: https://*.wikimedia.org https://*.wikipedia.org https://upload.wikimedia.org https://hatscripts.github.io",
   "connect-src 'self' https://*.wikipedia.org https://*.wikimedia.org",
   "font-src 'self' data:",
   "media-src 'self' blob:",
