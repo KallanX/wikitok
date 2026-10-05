@@ -200,38 +200,47 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
       <div className="flex-1 min-h-0 w-full flex items-center justify-center px-4 md:px-8 py-2 relative z-10 overflow-hidden">
         {article.thumbnail ? (
           <div
-            className="relative max-h-full max-w-full flex items-center justify-center group cursor-zoom-in"
+            className="relative h-full w-auto aspect-square max-h-[360px] sm:max-h-[400px] md:max-h-[440px] max-w-full flex items-center justify-center rounded-2xl sm:rounded-3xl overflow-hidden bg-neutral-900/80 border border-white/10 shadow-2xl backdrop-blur-md group cursor-zoom-in transition-all duration-300 hover:border-white/20"
             onClick={(e) => {
               e.stopPropagation();
               setShowLightbox(true);
             }}
           >
-            {/* Loading placeholder: stays centered and matches aspect ratio */}
+            {/* Loading placeholder: matches the exact frame geometry */}
             {!imageLoaded && (
-              <div
-                style={
-                  article.thumbnail.width && article.thumbnail.height
-                    ? {
-                        aspectRatio: `${article.thumbnail.width} / ${article.thumbnail.height}`,
-                      }
-                    : undefined
-                }
-                className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 max-h-full max-w-full bg-white/5 border border-white/5 rounded-2xl animate-pulse flex items-center justify-center"
-              >
+              <div className="absolute inset-0 bg-white/5 animate-pulse flex items-center justify-center z-10">
                 <Loader2 className="w-8 h-8 text-white/30 animate-spin" />
               </div>
             )}
 
-            {/* Responsive image: dynamically constrained to avoid overflowing into text */}
+            {/* Ambient blurred backdrop fill to complement transparent or letterboxed content */}
+            <img
+              src={article.thumbnail.source}
+              alt=""
+              aria-hidden="true"
+              className={`absolute inset-0 w-full h-full object-cover blur-2xl scale-125 opacity-30 transition-opacity duration-500 pointer-events-none ${
+                imageLoaded ? "opacity-30" : "opacity-0"
+              }`}
+            />
+            <div className="absolute inset-0 bg-black/20 pointer-events-none" />
+
+            {/* Responsive image: cleanly formatted in a rounded object */}
             <img
               loading={isActive ? "eager" : "lazy"}
               fetchPriority={isActive ? "high" : "auto"}
               src={article.thumbnail.source}
               alt={article.displaytitle}
-              className={`max-h-full max-w-full w-auto object-contain rounded-2xl shadow-2xl transition-all duration-500 group-hover:scale-[1.02] ${
+              className={`relative z-10 w-full h-full ${
+                article.thumbnail.width &&
+                article.thumbnail.height &&
+                (article.thumbnail.width / article.thumbnail.height > 2.0 ||
+                  article.thumbnail.height / article.thumbnail.width > 2.0)
+                  ? "object-contain p-2 drop-shadow-xl"
+                  : "object-cover"
+              } transition-all duration-500 group-hover:scale-105 ${
                 imageLoaded
-                  ? "opacity-100 relative"
-                  : "opacity-0 absolute pointer-events-none"
+                  ? "opacity-100"
+                  : "opacity-0 pointer-events-none"
               }`}
               onLoad={() => setImageLoaded(true)}
               onError={() => setImageLoaded(true)}
@@ -239,20 +248,20 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
 
             {/* Tap to zoom badge */}
             {imageLoaded && (
-              <div className="absolute bottom-3 right-3 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white/70 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+              <div className="absolute bottom-3 right-3 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white/70 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
                 <Maximize2 className="w-4 h-4" />
               </div>
             )}
           </div>
         ) : (
-          <div className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-center text-white/40 text-sm">
+          <div className="relative h-full w-auto aspect-square max-h-[360px] sm:max-h-[400px] md:max-h-[440px] max-w-full rounded-2xl sm:rounded-3xl bg-neutral-900/80 border border-white/10 flex items-center justify-center text-white/40 text-sm shadow-2xl">
             <span>No image available</span>
           </div>
         )}
       </div>
 
       {/* 4. Article Information & Action Sheet in layout flow */}
-      <div className="flex-shrink-0 w-full relative z-20 pb-[max(1.25rem,env(safe-area-inset-bottom,1.25rem))] px-4 sm:px-6 md:px-8 pt-6 bg-gradient-to-t from-black via-black/95 to-black/40">
+      <div className="flex-shrink-0 w-full relative z-20 pb-[max(2rem,calc(env(safe-area-inset-bottom,0px)+1.25rem))] px-4 sm:px-6 md:px-8 pt-6 bg-gradient-to-t from-black via-black/95 to-black/40">
         <div className="absolute -top-10 left-0 right-0 h-10 bg-gradient-to-t from-black/40 to-transparent pointer-events-none" />
         <div className="max-w-2xl mx-auto relative z-10">
           {/* Header Row: Title & Action Buttons */}

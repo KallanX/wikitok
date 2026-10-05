@@ -235,7 +235,7 @@ function App() {
 
       {/* First-time swipe hint */}
       {!hasScrolled && articles.length > 0 && (
-        <div className="fixed bottom-2 left-1/2 -translate-x-1/2 z-30 pointer-events-none flex flex-col items-center gap-1 text-white/60 animate-bounce">
+        <div className="fixed bottom-[max(1.5rem,calc(env(safe-area-inset-bottom,0px)+0.75rem))] left-1/2 -translate-x-1/2 z-30 pointer-events-none flex flex-col items-center gap-1 text-white/60 animate-bounce">
           <span className="text-[11px] uppercase tracking-wider font-semibold drop-shadow">
             Swipe up for next
           </span>
@@ -250,7 +250,7 @@ function App() {
           onClick={() => setShowAbout(false)}
         >
           <div
-            className="bg-gray-900 border border-white/10 z-50 p-6 md:p-8 rounded-2xl max-w-md w-full relative shadow-2xl"
+            className="bg-gray-900 border border-white/10 z-50 p-6 md:p-8 rounded-2xl max-w-md w-full max-h-[85dvh] overflow-y-auto relative shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -344,7 +344,7 @@ function App() {
           onClick={() => setShowLikes(false)}
         >
           <div
-            className="bg-gray-900 border border-white/10 z-50 p-6 rounded-2xl w-full max-w-2xl h-[80vh] flex flex-col relative shadow-2xl"
+            className="bg-gray-900 border border-white/10 z-50 p-6 rounded-2xl w-full max-w-2xl h-[80dvh] max-h-[85dvh] flex flex-col relative shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <button
