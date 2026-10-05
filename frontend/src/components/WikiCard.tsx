@@ -128,22 +128,41 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
     return /\.(svg|png)(\?|$)/i.test(article.thumbnail?.source || "");
   });
 
+  const [aspectRatio, setAspectRatio] = useState<string | undefined>(() => {
+    if (article.thumbnail?.width && article.thumbnail?.height) {
+      return `${article.thumbnail.width} / ${article.thumbnail.height}`;
+    }
+    return undefined;
+  });
+
   // Reset imageLoaded and transparency state when article thumbnail changes
   useEffect(() => {
     setImageLoaded(false);
     setIsTransparent(
       /\.(svg|png)(\?|$)/i.test(article.thumbnail?.source || "")
     );
-  }, [article.thumbnail?.source]);
+    if (article.thumbnail?.width && article.thumbnail?.height) {
+      setAspectRatio(`${article.thumbnail.width} / ${article.thumbnail.height}`);
+    } else {
+      setAspectRatio(undefined);
+    }
+  }, [
+    article.thumbnail?.source,
+    article.thumbnail?.width,
+    article.thumbnail?.height,
+  ]);
 
   const handleImageLoad = (e: React.SyntheticEvent<HTMLImageElement>) => {
     setImageLoaded(true);
+    const img = e.currentTarget;
+    if (img.naturalWidth && img.naturalHeight) {
+      setAspectRatio(`${img.naturalWidth} / ${img.naturalHeight}`);
+    }
     if (/\.(svg|png)(\?|$)/i.test(article.thumbnail?.source || "")) {
       setIsTransparent(true);
       return;
     }
     try {
-      const img = e.currentTarget;
       const canvas = document.createElement("canvas");
       canvas.width = 16;
       canvas.height = 16;
@@ -234,6 +253,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
       <div className="flex-1 min-h-0 w-full flex items-center justify-center px-4 md:px-8 py-2 relative z-10 overflow-hidden">
         {article.thumbnail ? (
           <div
+            style={aspectRatio ? { aspectRatio } : undefined}
             className={`relative max-h-full max-w-full flex items-center justify-center rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl transition-all duration-300 group cursor-zoom-in ${
               isTransparent
                 ? "bg-white border border-white/40 p-3 sm:p-4"
@@ -246,16 +266,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
           >
             {/* Loading placeholder: stays centered and matches aspect ratio */}
             {!imageLoaded && (
-              <div
-                style={
-                  article.thumbnail.width && article.thumbnail.height
-                    ? {
-                        aspectRatio: `${article.thumbnail.width} / ${article.thumbnail.height}`,
-                      }
-                    : undefined
-                }
-                className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 max-h-full max-w-full bg-white/5 border border-white/5 rounded-2xl animate-pulse flex items-center justify-center"
-              >
+              <div className="absolute inset-0 bg-white/5 animate-pulse flex items-center justify-center z-10">
                 <Loader2 className="w-8 h-8 text-white/30 animate-spin" />
               </div>
             )}
@@ -267,7 +278,9 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
               crossOrigin="anonymous"
               src={article.thumbnail.source}
               alt={article.displaytitle}
-              className={`max-h-full max-w-full w-auto h-auto object-contain transition-all duration-300 group-hover:scale-[1.02] ${
+              width={article.thumbnail.width}
+              height={article.thumbnail.height}
+              className={`w-full h-full object-contain transition-all duration-300 group-hover:scale-[1.02] ${
                 isTransparent ? "rounded-lg" : "rounded-2xl sm:rounded-3xl"
               } ${
                 imageLoaded
