@@ -49,6 +49,8 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
   const { currentLanguage } = useLocalization();
 
   const lastTapRef = useRef<number>(0);
+  const lastTouchTimeRef = useRef<number>(0);
+  const lastDoubleTapTimeRef = useRef<number>(0);
   const cardRef = useRef<HTMLDivElement>(null);
 
   // Stop speaking when speech ends or component unmounts
@@ -113,6 +115,12 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
   };
 
   const handleDoubleTap = (clientX?: number, clientY?: number) => {
+    const now = Date.now();
+    if (now - lastDoubleTapTimeRef.current < 450) {
+      return;
+    }
+    lastDoubleTapTimeRef.current = now;
+
     let x = clientX;
     let y = clientY;
     if (!x || !y) {
@@ -210,6 +218,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
 
   // Touch gesture handler for mobile double tap
   const handleTouchEnd = (e: React.TouchEvent) => {
+    lastTouchTimeRef.current = Date.now();
     if ((e.target as HTMLElement)?.closest("button, a, input")) {
       return;
     }
@@ -247,6 +256,8 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
       ref={cardRef}
       className="h-[100dvh] min-h-[100dvh] w-full flex flex-col justify-between snap-start relative overflow-hidden bg-black select-none pt-26 sm:pt-20 md:pt-18"
       onDoubleClick={(e) => {
+        // Ignore synthetic dblclick events emulated by mobile browsers after touch
+        if (Date.now() - lastTouchTimeRef.current < 600) return;
         if ((e.target as HTMLElement)?.closest("button, a, input")) return;
         handleDoubleTap(e.clientX, e.clientY);
       }}
