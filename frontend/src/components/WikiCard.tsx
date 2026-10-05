@@ -2,16 +2,15 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import {
   Share2,
   Heart,
+  HeartCrack,
   Volume2,
   VolumeX,
   BookOpen,
-  Maximize2,
   ExternalLink,
   Loader2,
 } from "lucide-react";
 import { useLikedArticles } from "../contexts/LikedArticlesContext";
 import { useLocalization } from "../hooks/useLocalization";
-import { LightboxModal } from "./LightboxModal";
 import { ReaderModal } from "./ReaderModal";
 import "../assets/heartAnimation.css";
 
@@ -33,18 +32,18 @@ interface WikiCardProps {
   isActive?: boolean;
 }
 
-interface FloatingHeart {
+interface FloatingReaction {
   id: number;
   x: number;
   y: number;
+  type: "heart" | "broken";
 }
 
 export function WikiCard({ article, isActive }: WikiCardProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [showLightbox, setShowLightbox] = useState(false);
   const [showReader, setShowReader] = useState(false);
-  const [floatingHearts, setFloatingHearts] = useState<FloatingHeart[]>([]);
+  const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
 
   const { toggleLike, isLiked } = useLikedArticles();
   const { currentLanguage } = useLocalization();
@@ -100,26 +99,53 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
     window.speechSynthesis.speak(utterance);
   };
 
-  // Floating heart spawner on double tap/click
-  const spawnFloatingHeart = (x: number, y: number) => {
+  // Floating reaction spawner on double tap/click
+  const spawnFloatingReaction = (
+    x: number,
+    y: number,
+    type: "heart" | "broken"
+  ) => {
     const id = Date.now() + Math.random();
-    setFloatingHearts((prev) => [...prev, { id, x, y }]);
+    setFloatingReactions((prev) => [...prev, { id, x, y, type }]);
     setTimeout(() => {
-      setFloatingHearts((prev) => prev.filter((h) => h.id !== id));
+      setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
     }, 900);
   };
 
-  const handleDoubleTap = (clientX: number, clientY: number) => {
-    if (!isLiked(article.pageid)) {
-      toggleLike(article);
+  const handleDoubleTap = (clientX?: number, clientY?: number) => {
+    let x = clientX;
+    let y = clientY;
+    if (!x || !y) {
+      if (cardRef.current) {
+        const rect = cardRef.current.getBoundingClientRect();
+        x = rect.left + rect.width / 2;
+        y = rect.top + rect.height / 2;
+      } else {
+        x = window.innerWidth / 2;
+        y = window.innerHeight / 2;
+      }
     }
-    spawnFloatingHeart(clientX, clientY);
 
-    if (typeof navigator !== "undefined" && navigator.vibrate) {
-      try {
-        navigator.vibrate(40);
-      } catch {
-        // Ignored
+    const wasLiked = isLiked(article.pageid);
+    toggleLike(article);
+
+    if (wasLiked) {
+      spawnFloatingReaction(x, y, "broken");
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        try {
+          navigator.vibrate([30, 40, 30]);
+        } catch {
+          // Ignored
+        }
+      }
+    } else {
+      spawnFloatingReaction(x, y, "heart");
+      if (typeof navigator !== "undefined" && navigator.vibrate) {
+        try {
+          navigator.vibrate(40);
+        } catch {
+          // Ignored
+        }
       }
     }
   };
@@ -184,6 +210,9 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
 
   // Touch gesture handler for mobile double tap
   const handleTouchEnd = (e: React.TouchEvent) => {
+    if ((e.target as HTMLElement)?.closest("button, a, input")) {
+      return;
+    }
     const now = Date.now();
     const DOUBLE_TAP_DELAY = 300;
     if (now - lastTapRef.current < DOUBLE_TAP_DELAY) {
@@ -217,7 +246,10 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
     <div
       ref={cardRef}
       className="h-[100dvh] min-h-[100dvh] w-full flex flex-col justify-between snap-start relative overflow-hidden bg-black select-none pt-26 sm:pt-20 md:pt-18"
-      onDoubleClick={(e) => handleDoubleTap(e.clientX, e.clientY)}
+      onDoubleClick={(e) => {
+        if ((e.target as HTMLElement)?.closest("button, a, input")) return;
+        handleDoubleTap(e.clientX, e.clientY);
+      }}
       onTouchEnd={handleTouchEnd}
     >
       {/* 1. Ambient blurred background layer */}
@@ -238,14 +270,22 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
         <div className="absolute inset-0 bg-gradient-to-b from-gray-900 to-black" />
       )}
 
-      {/* 2. Floating interactive hearts */}
-      {floatingHearts.map((heart) => (
+      {/* 2. Floating interactive heart & broken-heart reactions */}
+      {floatingReactions.map((reaction) => (
         <div
-          key={heart.id}
-          style={{ left: heart.x, top: heart.y }}
-          className="fixed pointer-events-none -translate-x-1/2 -translate-y-1/2 z-50 animate-heart-burst"
+          key={reaction.id}
+          style={{ left: reaction.x, top: reaction.y }}
+          className={`fixed pointer-events-none -translate-x-1/2 -translate-y-1/2 z-50 ${
+            reaction.type === "broken"
+              ? "animate-heart-crack-burst"
+              : "animate-heart-burst"
+          }`}
         >
-          <Heart className="w-20 h-20 text-red-500 fill-red-500 drop-shadow-2xl" />
+          {reaction.type === "broken" ? (
+            <HeartCrack className="w-24 h-24 text-white fill-red-600 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] filter" />
+          ) : (
+            <Heart className="w-24 h-24 text-red-500 fill-red-500 drop-shadow-[0_10px_20px_rgba(239,68,68,0.5)]" />
+          )}
         </div>
       ))}
 
@@ -254,15 +294,11 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
         {article.thumbnail ? (
           <div
             style={aspectRatio ? { aspectRatio } : undefined}
-            className={`relative max-h-full max-w-full flex items-center justify-center rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl transition-all duration-300 group cursor-zoom-in ${
+            className={`relative max-h-full max-w-full flex items-center justify-center rounded-2xl sm:rounded-3xl overflow-hidden shadow-2xl transition-all duration-300 ${
               isTransparent
                 ? "bg-white border border-white/40 p-3 sm:p-4"
                 : "bg-neutral-900/40 border border-white/10 p-0"
             }`}
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowLightbox(true);
-            }}
           >
             {/* Loading placeholder: stays centered and matches aspect ratio */}
             {!imageLoaded && (
@@ -280,7 +316,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
               alt={article.displaytitle}
               width={article.thumbnail.width}
               height={article.thumbnail.height}
-              className={`w-full h-full object-contain transition-all duration-300 group-hover:scale-[1.02] ${
+              className={`w-full h-full object-contain transition-all duration-300 ${
                 isTransparent ? "rounded-lg" : "rounded-2xl sm:rounded-3xl"
               } ${
                 imageLoaded
@@ -290,13 +326,6 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
               onLoad={handleImageLoad}
               onError={() => setImageLoaded(true)}
             />
-
-            {/* Tap to zoom badge */}
-            {imageLoaded && (
-              <div className="absolute bottom-3 right-3 p-1.5 rounded-full bg-black/60 backdrop-blur-md text-white/70 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-20">
-                <Maximize2 className="w-4 h-4" />
-              </div>
-            )}
           </div>
         ) : (
           <div className="w-56 h-56 sm:w-72 sm:h-72 md:w-80 md:h-80 rounded-2xl bg-white/5 border border-white/5 flex items-center justify-center text-white/40 text-sm">
@@ -399,13 +428,6 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
       </div>
 
       {/* 5. Modals */}
-      {showLightbox && article.thumbnail && (
-        <LightboxModal
-          article={article}
-          onClose={() => setShowLightbox(false)}
-        />
-      )}
-
       {showReader && (
         <ReaderModal article={article} onClose={() => setShowReader(false)} />
       )}
