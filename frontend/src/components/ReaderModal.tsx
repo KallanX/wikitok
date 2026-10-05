@@ -540,11 +540,18 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
           className="overflow-y-auto p-5 md:p-8 pb-[max(3.5rem,calc(env(safe-area-inset-bottom,0px)+2.5rem))] md:pb-8 space-y-5 text-white/90 overscroll-contain"
         >
           {article.thumbnail?.source && (
-            <div className="w-full max-h-64 rounded-xl overflow-hidden bg-black/40 flex items-center justify-center">
+            <div
+              className={`w-full max-h-64 rounded-xl overflow-hidden flex items-center justify-center shadow-lg ${
+                /\.(svg|png)(\?|$)/i.test(article.thumbnail.source)
+                  ? "bg-white p-3 border border-white/20"
+                  : "bg-black/40"
+              }`}
+            >
               <img
+                crossOrigin="anonymous"
                 src={article.thumbnail.source}
                 alt={article.displaytitle}
-                className="max-h-64 w-auto object-contain mx-auto"
+                className="max-h-60 w-auto object-contain mx-auto rounded-lg"
               />
             </div>
           )}

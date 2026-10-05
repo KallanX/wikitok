@@ -35,11 +35,20 @@ export function LightboxModal({ article, onClose }: LightboxModalProps) {
         className="relative max-w-5xl max-h-[90vh] flex flex-col items-center"
         onClick={(e) => e.stopPropagation()}
       >
-        <img
-          src={article.thumbnail.source}
-          alt={article.displaytitle}
-          className="max-h-[80vh] max-w-full object-contain rounded-lg shadow-2xl"
-        />
+        <div
+          className={`flex items-center justify-center rounded-2xl overflow-hidden shadow-2xl ${
+            /\.(svg|png)(\?|$)/i.test(article.thumbnail.source)
+              ? "bg-white p-4 sm:p-6"
+              : ""
+          }`}
+        >
+          <img
+            crossOrigin="anonymous"
+            src={article.thumbnail.source}
+            alt={article.displaytitle}
+            className="max-h-[75dvh] max-w-full object-contain rounded-lg shadow-2xl"
+          />
+        </div>
 
         <div className="mt-4 flex items-center justify-between w-full px-2 text-white/80 text-sm">
           <span className="font-medium truncate max-w-md">
