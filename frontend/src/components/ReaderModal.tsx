@@ -447,7 +447,7 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
     >
       <div
         style={sheetStyle}
-        className={`w-full md:max-w-2xl bg-gray-900 border-t md:border border-white/10 rounded-t-3xl md:rounded-2xl max-h-[88vh] md:max-h-[85vh] flex flex-col shadow-2xl overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
+        className={`w-full md:max-w-2xl bg-gray-900 border-t md:border border-white/10 rounded-t-3xl md:rounded-2xl max-h-[85dvh] flex flex-col shadow-2xl overflow-hidden transition-all duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] pb-[env(safe-area-inset-bottom,0px)] md:pb-0 ${
           isVisible
             ? "translate-y-0 opacity-100 scale-100"
             : "translate-y-full md:translate-y-8 opacity-0 md:scale-95"
@@ -537,14 +537,21 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
           onTouchMove={handleContentTouchMove}
           onTouchEnd={handleContentTouchEnd}
           onTouchCancel={handleContentTouchEnd}
-          className="overflow-y-auto p-5 md:p-8 space-y-5 text-white/90 overscroll-contain"
+          className="overflow-y-auto p-5 md:p-8 pb-[max(3.5rem,calc(env(safe-area-inset-bottom,0px)+2.5rem))] md:pb-8 space-y-5 text-white/90 overscroll-contain"
         >
           {article.thumbnail?.source && (
-            <div className="w-full max-h-64 rounded-xl overflow-hidden bg-black/40 flex items-center justify-center">
+            <div
+              className={`w-full max-h-64 rounded-xl overflow-hidden flex items-center justify-center shadow-lg ${
+                /\.(svg|png)(\?|$)/i.test(article.thumbnail.source)
+                  ? "bg-white p-3 border border-white/20"
+                  : "bg-black/40"
+              }`}
+            >
               <img
+                crossOrigin="anonymous"
                 src={article.thumbnail.source}
                 alt={article.displaytitle}
-                className="max-h-64 w-auto object-contain mx-auto"
+                className="max-h-60 w-auto object-contain mx-auto rounded-lg"
               />
             </div>
           )}
