@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
@@ -10,6 +10,8 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: "autoUpdate",
+      injectRegister: "script",
+      manifest: false,
       includeAssets: [
         "favicon.ico",
         "favicon.svg",
@@ -17,21 +19,11 @@ export default defineConfig({
         "wiki-logo.svg",
         "flags/*.svg",
       ],
-      manifest: {
-        name: "WikiTok",
-        short_name: "WikiTok",
-        icons: [
-          {
-            src: "/wiki-logo.svg",
-            sizes: "any",
-            type: "image/svg+xml",
-          },
-        ],
-        start_url: "/",
-        display: "standalone",
-        background_color: "#000000",
-        theme_color: "#000000",
-      },
     }),
   ],
+  test: {
+    environment: "happy-dom",
+    setupFiles: ["tests/setup.ts"],
+    include: ["tests/**/*.test.ts", "tests/**/*.test.tsx"],
+  },
 });

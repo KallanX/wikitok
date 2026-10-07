@@ -30,6 +30,7 @@ ENV DIST_DIR=/app/dist
 # Copy built assets and server script
 COPY --from=builder --chown=bun:bun /app/dist ./dist
 COPY --from=builder --chown=bun:bun /app/server.ts ./server.ts
+COPY --from=builder --chown=bun:bun /app/server ./server
 
 # Run as non-root user
 USER bun
@@ -38,6 +39,6 @@ EXPOSE 3000
 
 # Container healthcheck
 HEALTHCHECK --interval=15s --timeout=5s --start-period=5s --retries=3 \
-  CMD wget -q --spider http://127.0.0.1:${PORT}/health || exit 1
+  CMD bun -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["bun", "run", "server.ts"]

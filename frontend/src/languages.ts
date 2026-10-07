@@ -136,7 +136,7 @@ export const LANGUAGES = [
   },
   {
     id: "id",
-    name: "Indonesian",
+    name: "Bahasa Indonesia",
     flag: "/flags/id.svg",
     api: "https://id.wikipedia.org/w/api.php?",
     article: "https://id.wikipedia.org/wiki/",
