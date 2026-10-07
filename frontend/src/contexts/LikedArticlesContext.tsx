@@ -1,50 +1,58 @@
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { useState, useEffect, useMemo, useCallback, ReactNode } from "react";
 import type { WikiArticle } from "../components/WikiCard";
+import { likeKey, type LikeIdentity } from "../lib/likeKey";
+import { LikedArticlesContext } from "../hooks/useLikedArticles";
 
-interface LikedArticlesContextType {
-  likedArticles: WikiArticle[];
-  toggleLike: (article: WikiArticle) => void;
-  isLiked: (pageid: number) => boolean;
+function loadLikedArticles(): WikiArticle[] {
+  try {
+    const saved = localStorage.getItem("likedArticles");
+    if (!saved) return [];
+    const parsed = JSON.parse(saved) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (item): item is WikiArticle =>
+        Boolean(item) &&
+        typeof item === "object" &&
+        typeof (item as WikiArticle).pageid === "number" &&
+        typeof (item as WikiArticle).title === "string"
+    );
+  } catch {
+    return [];
+  }
 }
 
-const LikedArticlesContext = createContext<LikedArticlesContextType | undefined>(undefined);
-
 export function LikedArticlesProvider({ children }: { children: ReactNode }) {
-  const [likedArticles, setLikedArticles] = useState<WikiArticle[]>(() => {
-    const saved = localStorage.getItem("likedArticles");
-    return saved ? JSON.parse(saved) : [];
-  });
+  const [likedArticles, setLikedArticles] = useState<WikiArticle[]>(loadLikedArticles);
 
   useEffect(() => {
-    localStorage.setItem("likedArticles", JSON.stringify(likedArticles));
+    try {
+      localStorage.setItem("likedArticles", JSON.stringify(likedArticles));
+    } catch {
+      // Private mode and full storage should not crash the feed.
+    }
   }, [likedArticles]);
 
-  const toggleLike = (article: WikiArticle) => {
-    setLikedArticles((prev) => {
-      const alreadyLiked = prev.some((a) => a.pageid === article.pageid);
-      if (alreadyLiked) {
-        return prev.filter((a) => a.pageid !== article.pageid);
-      } else {
-        return [...prev, article];
-      }
-    });
-  };
+  const keys = useMemo(() => new Set(likedArticles.map((article) => likeKey(article))), [likedArticles]);
 
-  const isLiked = (pageid: number) => {
-    return likedArticles.some((article) => article.pageid === pageid);
-  };
+  const toggleLike = useCallback((article: WikiArticle) => {
+    const key = likeKey(article);
+    setLikedArticles((prev) => {
+      const alreadyLiked = prev.some((item) => likeKey(item) === key);
+      if (alreadyLiked) return prev.filter((item) => likeKey(item) !== key);
+      return [...prev, article];
+    });
+  }, []);
+
+  const isLiked = useCallback((article: LikeIdentity) => keys.has(likeKey(article)), [keys]);
+
+  const value = useMemo(
+    () => ({ likedArticles, toggleLike, isLiked }),
+    [likedArticles, toggleLike, isLiked]
+  );
 
   return (
-    <LikedArticlesContext.Provider value={{ likedArticles, toggleLike, isLiked }}>
+    <LikedArticlesContext.Provider value={value}>
       {children}
     </LikedArticlesContext.Provider>
   );
-}
-
-export function useLikedArticles() {
-  const context = useContext(LikedArticlesContext);
-  if (!context) {
-    throw new Error("useLikedArticles must be used within a LikedArticlesProvider");
-  }
-  return context;
 }

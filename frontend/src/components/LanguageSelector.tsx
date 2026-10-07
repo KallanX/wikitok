@@ -28,12 +28,26 @@ export function LanguageSelector() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!showDropdown) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" || event.key === "ArrowDown" || event.key === "ArrowUp" || event.key.toLowerCase() === "j" || event.key.toLowerCase() === "k" || event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+      if (event.key === "Escape") setShowDropdown(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [showDropdown]);
+
   return (
     <div className="relative inline-flex items-center" ref={dropdownRef}>
       <button
         onClick={() => setShowDropdown(!showDropdown)}
         className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 text-xs text-white/90 hover:text-white transition-all backdrop-blur-md"
         aria-label="Select Wikipedia Language"
+        aria-haspopup="listbox"
         aria-expanded={showDropdown}
       >
         <img
@@ -46,7 +60,11 @@ export function LanguageSelector() {
       </button>
 
       {showDropdown && (
-        <div className="absolute overflow-y-auto max-h-[260px] py-1 w-44 right-0 top-full mt-2 bg-gray-900/95 border border-white/10 backdrop-blur-lg rounded-xl shadow-2xl z-50">
+        <div
+          role="listbox"
+          aria-label="Wikipedia languages"
+          className="absolute overflow-y-auto max-h-[260px] py-1 w-44 end-0 top-full mt-2 bg-gray-900/95 border border-white/10 backdrop-blur-lg rounded-xl shadow-2xl z-50"
+        >
           {sortedLanguages.map((language) => (
             <button
               key={language.id}
@@ -54,7 +72,9 @@ export function LanguageSelector() {
                 setLanguage(language.id);
                 setShowDropdown(false);
               }}
-              className={`w-full items-center flex gap-2.5 px-3 py-1.5 text-left text-xs transition-colors ${
+              role="option"
+              aria-selected={language.id === currentLanguage.id}
+              className={`w-full items-center flex gap-2.5 px-3 py-1.5 text-start text-xs transition-colors ${
                 language.id === currentLanguage.id
                   ? "bg-white/15 text-white font-medium"
                   : "text-white/80 hover:bg-white/10 hover:text-white"

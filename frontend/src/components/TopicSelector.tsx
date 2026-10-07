@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from "react";
+import { prefersReducedMotion } from "../lib/motion";
 
 export interface TopicItem {
   id: string;
@@ -84,13 +85,15 @@ export function TopicSelector({
   const handleSelect = (id: string) => {
     onSelectTopic(id);
     const activeEl = buttonRefs.current.get(id);
-    if (activeEl) {
-      activeEl.scrollIntoView({
-        behavior: "smooth",
-        block: "nearest",
-        inline: "center",
-      });
-    }
+    const scroller = activeEl?.closest("[data-topic-scroll]");
+    if (!activeEl || !scroller) return;
+    const elementRect = activeEl.getBoundingClientRect();
+    const scrollerRect = scroller.getBoundingClientRect();
+    const delta = elementRect.left - scrollerRect.left - (scrollerRect.width - elementRect.width) / 2;
+    scroller.scrollBy({
+      left: delta,
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
   };
 
   const isSmall = size === "sm";

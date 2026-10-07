@@ -1,5 +1,7 @@
 import path from "node:path";
 import fs from "node:fs";
+import { resolveClientIp } from "./server/clientIp.ts";
+import { createRateLimiter } from "./server/rateLimit.ts";
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -12,7 +14,7 @@ const CSP_DIRECTIVES = [
   "default-src 'self'",
   "script-src 'self'",
   "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob: https://*.wikimedia.org https://*.wikipedia.org https://upload.wikimedia.org https://hatscripts.github.io",
+  "img-src 'self' data: blob: https://*.wikimedia.org https://*.wikipedia.org",
   "connect-src 'self' https://*.wikipedia.org https://*.wikimedia.org",
   "font-src 'self' data:",
   "media-src 'self' blob:",
@@ -40,62 +42,32 @@ const BASE_SECURITY_HEADERS: Record<string, string> = {
 const SENSITIVE_EXTENSIONS_REGEX =
   /\.(env|git|bak|old|save|php|axd|properties|sql|ini|sh|action|application|yaml|yml|conf|config|key|pem|crt)$/i;
 
-// In-memory sliding window rate limiter
-interface RateLimitRecord {
-  count: number;
-  resetAt: number;
-}
-const rateLimitMap = new Map<string, RateLimitRecord>();
+// Fixed-window limiter. TRUST_PROXY decides when X-Forwarded-For is honored.
+const TRUST_PROXY = process.env.TRUST_PROXY ?? "";
+const rateLimiter = createRateLimiter(RATE_LIMIT_PER_MINUTE);
 
-// Periodic cleanup of expired rate limit entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [ip, record] of rateLimitMap.entries()) {
-    if (now > record.resetAt) {
-      rateLimitMap.delete(ip);
-    }
-  }
+const cleanupTimer = setInterval(() => {
+  rateLimiter.prune();
 }, 5 * 60 * 1000);
+cleanupTimer.unref?.();
 
 interface BunServerLike {
   requestIP?: (req: Request) => { address?: string } | null;
 }
 
 function getClientIp(req: Request, serverInstance?: BunServerLike): string {
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) {
-    // Leftmost address is the client address when behind reverse proxies
-    const firstIp = forwarded.split(",")[0].trim();
-    if (firstIp) return firstIp;
-  }
-  const realIp = req.headers.get("x-real-ip");
-  if (realIp) return realIp.trim();
-
+  let peer: string | undefined;
   try {
-    const ip = serverInstance?.requestIP?.(req)?.address;
-    if (ip) return ip;
+    peer = serverInstance?.requestIP?.(req)?.address;
   } catch {
-    // fallback
+    peer = undefined;
   }
-  return "127.0.0.1";
-}
-
-function checkRateLimit(ip: string): boolean {
-  const now = Date.now();
-  const windowMs = 60 * 1000;
-  const existing = rateLimitMap.get(ip);
-
-  if (!existing || now > existing.resetAt) {
-    rateLimitMap.set(ip, { count: 1, resetAt: now + windowMs });
-    return true;
-  }
-
-  if (existing.count >= RATE_LIMIT_PER_MINUTE) {
-    return false;
-  }
-
-  existing.count += 1;
-  return true;
+  return resolveClientIp({
+    peer,
+    forwardedFor: req.headers.get("x-forwarded-for"),
+    realIp: req.headers.get("x-real-ip"),
+    trustProxy: TRUST_PROXY,
+  });
 }
 
 interface StaticEntry {
@@ -173,6 +145,7 @@ const server = Bun.serve({
         headers.set("Access-Control-Allow-Origin", CORS_ORIGIN);
         headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
         headers.set("Access-Control-Allow-Headers", "Content-Type");
+        headers.set("Vary", "Origin");
       }
       return new Response(null, { status: 204, headers });
     }
@@ -181,7 +154,10 @@ const server = Bun.serve({
     if (req.method !== "GET" && req.method !== "HEAD") {
       return new Response("Method Not Allowed", {
         status: 405,
-        headers: BASE_SECURITY_HEADERS,
+        headers: {
+          ...BASE_SECURITY_HEADERS,
+          Allow: "GET, HEAD, OPTIONS",
+        },
       });
     }
 
@@ -195,7 +171,7 @@ const server = Bun.serve({
 
     // 5. Rate limiting perimeter
     const clientIp = getClientIp(req, server);
-    if (!checkRateLimit(clientIp)) {
+    if (!rateLimiter.check(clientIp)) {
       return new Response("Too Many Requests", {
         status: 429,
         headers: {
@@ -255,8 +231,13 @@ const server = Bun.serve({
     const entry = staticFiles.get(lookupPath);
     if (entry) {
       const responseHeaders = new Headers(entry.headers);
+      if (entry.file.type) responseHeaders.set("Content-Type", entry.file.type);
+      if (Number.isFinite(entry.file.size) && entry.file.size > 0) {
+        responseHeaders.set("Content-Length", String(entry.file.size));
+      }
       if (CORS_ORIGIN) {
         responseHeaders.set("Access-Control-Allow-Origin", CORS_ORIGIN);
+        responseHeaders.set("Vary", "Origin");
       }
       return new Response(req.method === "HEAD" ? null : entry.file, {
         headers: responseHeaders,
@@ -277,6 +258,7 @@ const server = Bun.serve({
       const responseHeaders = new Headers(indexEntry.headers);
       if (CORS_ORIGIN) {
         responseHeaders.set("Access-Control-Allow-Origin", CORS_ORIGIN);
+        responseHeaders.set("Vary", "Origin");
       }
       return new Response(req.method === "HEAD" ? null : indexEntry.file, {
         headers: responseHeaders,

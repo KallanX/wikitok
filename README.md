@@ -5,7 +5,7 @@ A TikTok-style interface for exploring random Wikipedia articles in multiple lan
 ## Features
 
 - Vertical scrolling feed of random Wikipedia articles
-- Support for 14 languages including English, Spanish, French, German, Chinese, Japanese and more
+- Support for 48 languages and Chinese, Wu, Gan, and Cantonese variants
 - Article previews with images, titles and excerpts
 - Share articles directly or copy links
 - Language selector with country flags
@@ -81,63 +81,7 @@ docker run -d --name wikitok -p 3000:3000 --restart unless-stopped wikitok
 
 ### Upstream Reverse Proxy (NGINX)
 
-If you are running an external NGINX reverse proxy on a separate server, use this production-ready configuration. It includes HTTPS redirection, HTTP/2, Gzip compression (shrinking bundle transfers by ~70%), rate limiting, security headers, and WebSocket support:
-
-```nginx
-# Rate limiting zone (place inside http {} block or before the server blocks)
-limit_req_zone $binary_remote_addr zone=wikitok_limit:10m rate=30r/s;
-
-# HTTP -> HTTPS redirect
-server {
-    listen 80;
-    server_name wikitok.yourdomain.com;
-    return 301 https://$host$request_uri;
-}
-
-# Production HTTPS server
-server {
-    listen 443 ssl http2;
-    server_name wikitok.yourdomain.com;
-
-    # SSL certificates (e.g. Let's Encrypt / Certbot)
-    ssl_certificate     /path/to/fullchain.pem;
-    ssl_certificate_key /path/to/privkey.pem;
-
-    # TLS protocols and ciphers
-    ssl_protocols TLSv1.2 TLSv1.3;
-    ssl_ciphers HIGH:!aNULL:!MD5;
-    ssl_prefer_server_ciphers on;
-
-    # Gzip compression for static assets
-    gzip on;
-    gzip_vary on;
-    gzip_proxied any;
-    gzip_comp_level 6;
-    gzip_types text/plain text/css application/json application/javascript text/xml application/xml application/xml+rss text/javascript image/svg+xml;
-
-    location / {
-        limit_req zone=wikitok_limit burst=50 nodelay;
-
-        proxy_pass http://<APP_SERVER_IP>:3000;
-        proxy_http_version 1.1;
-
-        # WebSocket support
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-
-        # Forwarded client headers
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-
-        # Timeouts and buffer tuning
-        proxy_connect_timeout 5s;
-        proxy_read_timeout 60s;
-        proxy_buffering on;
-    }
-}
-```
+Use [`nginx.conf.example`](nginx.conf.example) on the reverse proxy. It redirects HTTP to HTTPS, enables HTTP/2, rate limits, and sets the browser security headers. Point `proxy_pass` at the app on port 3000 and keep `X-Forwarded-For` so the app can rate-limit the real client. Set `TRUST_PROXY` to the proxy's address (see `.env.example`).
 
 > [!IMPORTANT]
 > - **HTTPS is required for PWA**: Modern browsers will only register Service Workers (`sw.js`) and enable offline PWA features over a secure HTTPS connection.
