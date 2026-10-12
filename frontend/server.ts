@@ -36,6 +36,7 @@ const BASE_SECURITY_HEADERS: Record<string, string> = {
   "Cross-Origin-Resource-Policy": "same-origin",
   "Permissions-Policy":
     "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
+  "X-Robots-Tag": "noindex, nofollow, noarchive",
 };
 
 // Sensitive file extension probes commonly targeted by scanners (inspired by crossword-hub)

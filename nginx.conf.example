@@ -72,6 +72,7 @@ server {
     add_header Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()" always;
     add_header Cross-Origin-Opener-Policy "same-origin" always;
     add_header Cross-Origin-Resource-Policy "same-origin" always;
+    add_header X-Robots-Tag "noindex, nofollow, noarchive" always;
 
     # Perimeter security: block access to hidden files and directories (except /.well-known/)
     location ~ /\.(?!well-known) {
