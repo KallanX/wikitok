@@ -164,3 +164,7 @@ export function resolveClientIp(options: {
   if (real && isValidIp(real) && !peerIsTrusted(real, options.trustProxy)) return real;
   return forwarded[0] ?? peer;
 }
+
+export function isPrivateIp(ip: string): boolean {
+  return isLoopback(ip) || isLinkLocal(ip) || isUniqueLocal(ip);
+}

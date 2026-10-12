@@ -27,6 +27,11 @@ ENV PORT=3000
 ENV HOST=0.0.0.0
 ENV DIST_DIR=/app/dist
 
+# Install production dependencies for server runtime
+COPY frontend/package.json frontend/bun.lock* ./
+RUN bun install --production --frozen-lockfile && \
+    chown -R bun:bun /app
+
 # Copy built assets and server script
 COPY --from=builder --chown=bun:bun /app/dist ./dist
 COPY --from=builder --chown=bun:bun /app/server.ts ./server.ts

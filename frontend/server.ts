@@ -2,6 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { resolveClientIp } from "./server/clientIp.ts";
 import { createRateLimiter } from "./server/rateLimit.ts";
+import { logAccess } from "./server/accessLogger.ts";
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
@@ -122,13 +123,150 @@ if (!indexEntry) {
   console.warn(`Warning: /index.html not found in ${DIST_DIR}`);
 }
 
+function handleRequest(req: Request, url: URL, clientIp: string): Response {
+  // 2. Allow CORS preflight if CORS_ORIGIN is explicitly configured
+  if (req.method === "OPTIONS") {
+    const headers = new Headers(BASE_SECURITY_HEADERS);
+    if (CORS_ORIGIN) {
+      headers.set("Access-Control-Allow-Origin", CORS_ORIGIN);
+      headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
+      headers.set("Access-Control-Allow-Headers", "Content-Type");
+      headers.set("Vary", "Origin");
+    }
+    return new Response(null, { status: 204, headers });
+  }
+
+  // 3. Only allow safe GET and HEAD requests for static hosting
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return new Response("Method Not Allowed", {
+      status: 405,
+      headers: {
+        ...BASE_SECURITY_HEADERS,
+        Allow: "GET, HEAD, OPTIONS",
+      },
+    });
+  }
+
+  // 4. URL length limit to prevent buffer/fuzzing overflow attempts
+  if (req.url.length > 2048) {
+    return new Response("URI Too Long", {
+      status: 414,
+      headers: BASE_SECURITY_HEADERS,
+    });
+  }
+
+  // 5. Rate limiting perimeter
+  if (!rateLimiter.check(clientIp)) {
+    return new Response("Too Many Requests", {
+      status: 429,
+      headers: {
+        ...BASE_SECURITY_HEADERS,
+        "Retry-After": "60",
+        "Content-Type": "text/plain; charset=utf-8",
+      },
+    });
+  }
+
+  let pathname: string;
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    return new Response("Bad Request", {
+      status: 400,
+      headers: BASE_SECURITY_HEADERS,
+    });
+  }
+
+  // 6. Perimeter defense: Reject hidden dotfiles or directories (.env, .git, etc.)
+  const segments = pathname.split("/");
+  const hasDotfileSegment = segments.some(
+    (segment) =>
+      segment.startsWith(".") &&
+      segment !== "." &&
+      segment !== ".." &&
+      segment !== ".well-known"
+  );
+  if (hasDotfileSegment) {
+    return new Response("Not Found", {
+      status: 404,
+      headers: BASE_SECURITY_HEADERS,
+    });
+  }
+
+  // 7. Perimeter defense: Block probing for sensitive extensions (.env, .git, .bak, .php, etc.)
+  if (SENSITIVE_EXTENSIONS_REGEX.test(pathname)) {
+    return new Response("Not Found", {
+      status: 404,
+      headers: BASE_SECURITY_HEADERS,
+    });
+  }
+
+  // 8. Canonical path traversal defense
+  const normalized = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
+  if (normalized.includes("..")) {
+    return new Response("Forbidden", {
+      status: 403,
+      headers: BASE_SECURITY_HEADERS,
+    });
+  }
+
+  const lookupPath = pathname === "/" ? "/index.html" : pathname;
+
+  // 9. Check if exact requested file is in our pre-indexed static map
+  const entry = staticFiles.get(lookupPath);
+  if (entry) {
+    const responseHeaders = new Headers(entry.headers);
+    if (entry.file.type) responseHeaders.set("Content-Type", entry.file.type);
+    if (Number.isFinite(entry.file.size) && entry.file.size > 0) {
+      responseHeaders.set("Content-Length", String(entry.file.size));
+    }
+    if (CORS_ORIGIN) {
+      headersWithCors(responseHeaders);
+    }
+    return new Response(req.method === "HEAD" ? null : entry.file, {
+      headers: responseHeaders,
+    });
+  }
+
+  // 10. If a specific file with extension was requested but doesn't exist -> 404
+  const hasExtension = path.extname(lookupPath) !== "";
+  if (hasExtension) {
+    return new Response("Not Found", {
+      status: 404,
+      headers: BASE_SECURITY_HEADERS,
+    });
+  }
+
+  // 11. SPA Fallback: serve index.html for client-side navigation routes
+  if (indexEntry) {
+    const responseHeaders = new Headers(indexEntry.headers);
+    if (CORS_ORIGIN) {
+      headersWithCors(responseHeaders);
+    }
+    return new Response(req.method === "HEAD" ? null : indexEntry.file, {
+      headers: responseHeaders,
+    });
+  }
+
+  return new Response("Not Found", {
+    status: 404,
+    headers: BASE_SECURITY_HEADERS,
+  });
+}
+
+function headersWithCors(headers: Headers): void {
+  headers.set("Access-Control-Allow-Origin", CORS_ORIGIN);
+  headers.set("Vary", "Origin");
+}
+
 const server = Bun.serve({
   port: PORT,
   hostname: HOST,
   fetch(req) {
+    const start = performance.now();
     const url = new URL(req.url);
 
-    // 1. Health check endpoint for Docker and load balancers
+    // 1. Health check endpoint for Docker and load balancers (bypass access logging to prevent log flooding)
     if (url.pathname === "/health" || url.pathname === "/healthz") {
       return new Response("OK", {
         status: 200,
@@ -139,137 +277,29 @@ const server = Bun.serve({
       });
     }
 
-    // 2. Allow CORS preflight if CORS_ORIGIN is explicitly configured
-    if (req.method === "OPTIONS") {
-      const headers = new Headers(BASE_SECURITY_HEADERS);
-      if (CORS_ORIGIN) {
-        headers.set("Access-Control-Allow-Origin", CORS_ORIGIN);
-        headers.set("Access-Control-Allow-Methods", "GET, HEAD, OPTIONS");
-        headers.set("Access-Control-Allow-Headers", "Content-Type");
-        headers.set("Vary", "Origin");
-      }
-      return new Response(null, { status: 204, headers });
-    }
-
-    // 3. Only allow safe GET and HEAD requests for static hosting
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      return new Response("Method Not Allowed", {
-        status: 405,
-        headers: {
-          ...BASE_SECURITY_HEADERS,
-          Allow: "GET, HEAD, OPTIONS",
-        },
-      });
-    }
-
-    // 4. URL length limit to prevent buffer/fuzzing overflow attempts
-    if (req.url.length > 2048) {
-      return new Response("URI Too Long", {
-        status: 414,
-        headers: BASE_SECURITY_HEADERS,
-      });
-    }
-
-    // 5. Rate limiting perimeter
     const clientIp = getClientIp(req, server);
-    if (!rateLimiter.check(clientIp)) {
-      return new Response("Too Many Requests", {
-        status: 429,
-        headers: {
-          ...BASE_SECURITY_HEADERS,
-          "Retry-After": "60",
-          "Content-Type": "text/plain; charset=utf-8",
-        },
-      });
-    }
-
-    let pathname: string;
+    let response: Response;
     try {
-      pathname = decodeURIComponent(url.pathname);
+      response = handleRequest(req, url, clientIp);
     } catch {
-      return new Response("Bad Request", {
-        status: 400,
+      response = new Response("Internal Server Error", {
+        status: 500,
         headers: BASE_SECURITY_HEADERS,
       });
     }
 
-    // 6. Perimeter defense: Reject hidden dotfiles or directories (.env, .git, etc.)
-    const segments = pathname.split("/");
-    const hasDotfileSegment = segments.some(
-      (segment) =>
-        segment.startsWith(".") &&
-        segment !== "." &&
-        segment !== ".." &&
-        segment !== ".well-known"
-    );
-    if (hasDotfileSegment) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: BASE_SECURITY_HEADERS,
-      });
-    }
+    const durationMs = Math.round(performance.now() - start);
 
-    // 7. Perimeter defense: Block probing for sensitive extensions (.env, .git, .bak, .php, etc.)
-    if (SENSITIVE_EXTENSIONS_REGEX.test(pathname)) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: BASE_SECURITY_HEADERS,
-      });
-    }
-
-    // 8. Canonical path traversal defense
-    const normalized = path.normalize(pathname).replace(/^(\.\.[/\\])+/, "");
-    if (normalized.includes("..")) {
-      return new Response("Forbidden", {
-        status: 403,
-        headers: BASE_SECURITY_HEADERS,
-      });
-    }
-
-    const lookupPath = pathname === "/" ? "/index.html" : pathname;
-
-    // 9. Check if exact requested file is in our pre-indexed static map
-    const entry = staticFiles.get(lookupPath);
-    if (entry) {
-      const responseHeaders = new Headers(entry.headers);
-      if (entry.file.type) responseHeaders.set("Content-Type", entry.file.type);
-      if (Number.isFinite(entry.file.size) && entry.file.size > 0) {
-        responseHeaders.set("Content-Length", String(entry.file.size));
-      }
-      if (CORS_ORIGIN) {
-        responseHeaders.set("Access-Control-Allow-Origin", CORS_ORIGIN);
-        responseHeaders.set("Vary", "Origin");
-      }
-      return new Response(req.method === "HEAD" ? null : entry.file, {
-        headers: responseHeaders,
-      });
-    }
-
-    // 10. If a specific file with extension was requested but doesn't exist -> 404
-    const hasExtension = path.extname(lookupPath) !== "";
-    if (hasExtension) {
-      return new Response("Not Found", {
-        status: 404,
-        headers: BASE_SECURITY_HEADERS,
-      });
-    }
-
-    // 11. SPA Fallback: serve index.html for client-side navigation routes
-    if (indexEntry) {
-      const responseHeaders = new Headers(indexEntry.headers);
-      if (CORS_ORIGIN) {
-        responseHeaders.set("Access-Control-Allow-Origin", CORS_ORIGIN);
-        responseHeaders.set("Vary", "Origin");
-      }
-      return new Response(req.method === "HEAD" ? null : indexEntry.file, {
-        headers: responseHeaders,
-      });
-    }
-
-    return new Response("Not Found", {
-      status: 404,
-      headers: BASE_SECURITY_HEADERS,
+    logAccess({
+      method: req.method,
+      url: req.url,
+      status: response.status,
+      durationMs,
+      ip: clientIp,
+      userAgent: req.headers.get("user-agent"),
     });
+
+    return response;
   },
 });
 
