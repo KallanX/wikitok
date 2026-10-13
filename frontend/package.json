@@ -9,7 +9,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "preview": "vite preview",
-    "start": "bun server.ts"
+    "start": "bun server.ts",
+    "update-geoip": "bun run node_modules/geoip-lite/scripts/updatedb.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.0.3",

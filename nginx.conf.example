@@ -26,8 +26,8 @@ server {
         return 404;
     }
 
-    # Perimeter security: block common scanning probes and sensitive file extensions
-    location ~* \.(env|git|bak|old|save|php|axd|properties|sql|ini|sh|action|application|yaml|yml|conf|config|key|pem|crt)$ {
+    # Perimeter security: block common scanning probes, sensitive paths, and extensions
+    location ~* (\.(env|git|bak|old|save|php|axd|properties|sql|ini|sh|action|application|yaml|yml|conf|config|key|pem|crt|log)$|/(dockerfile|credentials|secrets?|settings|env|config|auth|aws-exports|appsettings|runtime-config|composer|phpinfo|_profiler|actuator|wp-(admin|content|includes|config)|xmlrpc|server-status|server-info|id_rsa|id_ed25519)([-_.#?/]|$)) {
         deny all;
         return 404;
     }
@@ -80,8 +80,8 @@ server {
         return 404;
     }
 
-    # Perimeter security: block common scanning probes and sensitive file extensions
-    location ~* \.(env|git|bak|old|save|php|axd|properties|sql|ini|sh|action|application|yaml|yml|conf|config|key|pem|crt)$ {
+    # Perimeter security: block common scanning probes, sensitive paths, and extensions
+    location ~* (\.(env|git|bak|old|save|php|axd|properties|sql|ini|sh|action|application|yaml|yml|conf|config|key|pem|crt|log)$|/(dockerfile|credentials|secrets?|settings|env|config|auth|aws-exports|appsettings|runtime-config|composer|phpinfo|_profiler|actuator|wp-(admin|content|includes|config)|xmlrpc|server-status|server-info|id_rsa|id_ed25519)([-_.#?/]|$)) {
         deny all;
         return 404;
     }

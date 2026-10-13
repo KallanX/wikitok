@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        MAXMIND_LICENSE_KEY: ${MAXMIND_LICENSE_KEY:-}
     container_name: wikitok
     restart: unless-stopped
     ports:
@@ -20,6 +22,8 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN:-}
       # Rate limit in requests per minute per IP
       - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-120}
+      # Optional: Enable SPA fallback on unindexed routes (default false)
+      - ENABLE_SPA_FALLBACK=${ENABLE_SPA_FALLBACK:-false}
     # Security hardening for public internet exposure
     read_only: true
     tmpfs:

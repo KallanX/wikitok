@@ -29,7 +29,11 @@ ENV DIST_DIR=/app/dist
 
 # Install production dependencies for server runtime
 COPY frontend/package.json frontend/bun.lock* ./
+ARG MAXMIND_LICENSE_KEY
 RUN bun install --production --frozen-lockfile && \
+    if [ -n "$MAXMIND_LICENSE_KEY" ]; then \
+      bun run update-geoip "license_key=$MAXMIND_LICENSE_KEY"; \
+    fi && \
     chown -R bun:bun /app
 
 # Copy built assets and server script

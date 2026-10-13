@@ -1,1 +1,1 @@
-{"root":["./server.ts","./server/accessLogger.ts","./server/clientIp.ts","./server/rateLimit.ts"],"version":"5.6.3"}
+{"root":["./server.ts","./server/accessLogger.ts","./server/clientIp.ts","./server/perimeter.ts","./server/rateLimit.ts"],"version":"5.6.3"}

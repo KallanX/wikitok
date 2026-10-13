@@ -3,12 +3,14 @@ import fs from "node:fs";
 import { resolveClientIp } from "./server/clientIp.ts";
 import { createRateLimiter } from "./server/rateLimit.ts";
 import { logAccess } from "./server/accessLogger.ts";
+import { hasDotfileSegment, isSensitiveProbe } from "./server/perimeter.ts";
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || "0.0.0.0";
 const DIST_DIR = path.resolve(process.env.DIST_DIR || "./dist");
 const RATE_LIMIT_PER_MINUTE = Number(process.env.RATE_LIMIT_PER_MINUTE) || 120;
 const CORS_ORIGIN = process.env.CORS_ORIGIN || "";
+const ENABLE_SPA_FALLBACK = process.env.ENABLE_SPA_FALLBACK === "true";
 
 // Content Security Policy tailored for WikiTok SPA & Wikipedia media/data APIs
 const CSP_DIRECTIVES = [
@@ -39,10 +41,6 @@ const BASE_SECURITY_HEADERS: Record<string, string> = {
     "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
   "X-Robots-Tag": "noindex, nofollow, noarchive",
 };
-
-// Sensitive file extension probes commonly targeted by scanners (inspired by crossword-hub)
-const SENSITIVE_EXTENSIONS_REGEX =
-  /\.(env|git|bak|old|save|php|axd|properties|sql|ini|sh|action|application|yaml|yml|conf|config|key|pem|crt)$/i;
 
 // Fixed-window limiter. TRUST_PROXY decides when X-Forwarded-For is honored.
 const TRUST_PROXY = process.env.TRUST_PROXY ?? "";
@@ -178,23 +176,15 @@ function handleRequest(req: Request, url: URL, clientIp: string): Response {
   }
 
   // 6. Perimeter defense: Reject hidden dotfiles or directories (.env, .git, etc.)
-  const segments = pathname.split("/");
-  const hasDotfileSegment = segments.some(
-    (segment) =>
-      segment.startsWith(".") &&
-      segment !== "." &&
-      segment !== ".." &&
-      segment !== ".well-known"
-  );
-  if (hasDotfileSegment) {
+  if (hasDotfileSegment(pathname)) {
     return new Response("Not Found", {
       status: 404,
       headers: BASE_SECURITY_HEADERS,
     });
   }
 
-  // 7. Perimeter defense: Block probing for sensitive extensions (.env, .git, .bak, .php, etc.)
-  if (SENSITIVE_EXTENSIONS_REGEX.test(pathname)) {
+  // 7. Perimeter defense: Block probing for sensitive extensions and probe paths (.env, Dockerfile, phpinfo, credentials, etc.)
+  if (isSensitiveProbe(pathname)) {
     return new Response("Not Found", {
       status: 404,
       headers: BASE_SECURITY_HEADERS,
@@ -228,17 +218,10 @@ function handleRequest(req: Request, url: URL, clientIp: string): Response {
     });
   }
 
-  // 10. If a specific file with extension was requested but doesn't exist -> 404
-  const hasExtension = path.extname(lookupPath) !== "";
-  if (hasExtension) {
-    return new Response("Not Found", {
-      status: 404,
-      headers: BASE_SECURITY_HEADERS,
-    });
-  }
-
-  // 11. SPA Fallback: serve index.html for client-side navigation routes
-  if (indexEntry) {
+  // 10. SPA Fallback: WikiTok is a single-route application where all client state lives at "/".
+  // If SPA fallback is explicitly enabled via ENABLE_SPA_FALLBACK=true and the path has no extension,
+  // serve index.html. Otherwise, return 404 for any unindexed path to eliminate false 200 responses.
+  if (ENABLE_SPA_FALLBACK && path.extname(lookupPath) === "" && indexEntry) {
     const responseHeaders = new Headers(indexEntry.headers);
     if (CORS_ORIGIN) {
       headersWithCors(responseHeaders);
