@@ -1,6 +1,36 @@
 export const TOPIC_IDS = ["science", "history", "nature", "space", "art"] as const;
 export type TopicId = (typeof TOPIC_IDS)[number];
 
+export const FEED_TOPICS = [
+  { id: "all", label: "Random" },
+  { id: "popular", label: "Popular" },
+  { id: "today", label: "Today" },
+  { id: "science", label: "Science" },
+  { id: "history", label: "History" },
+  { id: "nature", label: "Nature" },
+  { id: "space", label: "Space" },
+  { id: "art", label: "Art" },
+] as const;
+
+export type FeedTopicId = (typeof FEED_TOPICS)[number]["id"];
+
+const DISCOVERY: Record<TopicId, string> = {
+  science: "articletopic:STEM",
+  history: "articletopic:history",
+  nature: "articletopic:biology OR articletopic:earth-and-environment",
+  space: "articletopic:space",
+  art: "articletopic:visual-arts",
+};
+
+export function topicDiscoveryQuery(topicId: string): string | null {
+  if (topicId in DISCOVERY) return DISCOVERY[topicId as TopicId];
+  return null;
+}
+
+export function isFeedTopic(topicId: string): boolean {
+  return FEED_TOPICS.some((topic) => topic.id === topicId);
+}
+
 type TopicTerms = Record<TopicId, string>;
 
 const EN: TopicTerms = {

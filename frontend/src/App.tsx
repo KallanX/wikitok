@@ -1,7 +1,10 @@
 import { useEffect, useRef, useCallback, useState } from "react";
-import { WikiCard, WikiArticle } from "./components/WikiCard";
-import { Loader2, Search, X, Download, ChevronUp, BookOpen } from "lucide-react";
+import { WikiCard } from "./components/WikiCard";
+import { Loader2, Search, X, Download, ChevronUp, BookOpen, History, Upload } from "lucide-react";
 import { LanguageSelector } from "./components/LanguageSelector";
+import { SearchDialog } from "./components/SearchDialog";
+import { HistoryDialog } from "./components/HistoryDialog";
+import { UpdatePrompt } from "./components/UpdatePrompt";
 import { useLikedArticles } from "./hooks/useLikedArticles";
 import { useLocalization } from "./hooks/useLocalization";
 import { useWikiArticles } from "./hooks/useWikiArticles";
@@ -9,34 +12,46 @@ import { useDialogBehavior } from "./hooks/useDialogBehavior";
 import { ReaderModal } from "./components/ReaderModal";
 import { TopicSelector } from "./components/TopicSelector";
 import { LANGUAGES } from "./languages";
+import type { WikiArticle } from "./lib/article";
+import { articleLabel } from "./lib/article";
+import { downloadJson } from "./lib/download";
 import { likeKey } from "./lib/likeKey";
 import { prefersReducedMotion } from "./lib/motion";
+import { loadHideSensitive, loadHistory, rememberSeen, saveHideSensitive, saveHistory } from "./lib/readingMemory";
+import { FEED_TOPICS } from "./lib/topics";
+import { appArticleHref, readFeedLocation } from "./lib/variantUrl";
 import { APP_VERSION } from "./version";
-
-const TOPICS = [
-  { id: "all", label: "Random" },
-  { id: "science", label: "Science" },
-  { id: "history", label: "History" },
-  { id: "nature", label: "Nature" },
-  { id: "space", label: "Space" },
-  { id: "art", label: "Art" },
-];
 
 const RENDER_WINDOW = 2;
 
 function App() {
   const [showAbout, setShowAbout] = useState(false);
   const [showLikes, setShowLikes] = useState(false);
+  const [showSearch, setShowSearch] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [activeArticleForReader, setActiveArticleForReader] = useState<WikiArticle | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [collectionFilter, setCollectionFilter] = useState("all");
+  const [importNote, setImportNote] = useState<string | null>(null);
   const [hasScrolled, setHasScrolled] = useState(false);
   const [activeArticleIndex, setActiveArticleIndex] = useState(0);
+  const [hideSensitive, setHideSensitive] = useState(loadHideSensitive);
+  const [online, setOnline] = useState(() => (typeof navigator === "undefined" ? true : navigator.onLine));
+  const [coarsePointer, setCoarsePointer] = useState(false);
+  const [history, setHistory] = useState<WikiArticle[]>(() =>
+    loadHistory<WikiArticle>().filter((item) => item && typeof item.pageid === "number" && typeof item.title === "string")
+  );
 
   const containerRef = useRef<HTMLDivElement>(null);
   const observerTarget = useRef<HTMLDivElement>(null);
   const aboutRef = useRef<HTMLDivElement>(null);
   const likesRef = useRef<HTMLDivElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
   const activeIndexRef = useRef(0);
+  const observerLock = useRef(0);
+  const linkedPage = useRef(typeof window === "undefined" ? undefined : readFeedLocation(window.location.search).pageid);
+  const pendingScroll = useRef<number | null>(null);
+  const articlesRef = useRef<WikiArticle[]>([]);
 
   const {
     articles,
@@ -48,9 +63,21 @@ function App() {
     setTopic,
     fetchArticles,
     retry,
-  } = useWikiArticles();
-  const { likedArticles, toggleLike } = useLikedArticles();
+    openArticle,
+    dismissArticle,
+    loadRelated,
+  } = useWikiArticles(hideSensitive);
+  const { likedArticles, toggleLike, storageWarning, setCollections, importLikes } = useLikedArticles();
   const { currentLanguage } = useLocalization();
+  const feedKey = `${currentLanguage.id}:${topic}`;
+  const [seenFeed, setSeenFeed] = useState(feedKey);
+  if (seenFeed !== feedKey) {
+    setSeenFeed(feedKey);
+    setActiveArticleIndex(0);
+  }
+  if (articles.length > 0 && activeArticleIndex >= articles.length) {
+    setActiveArticleIndex(articles.length - 1);
+  }
 
   const closeAbout = useCallback(() => setShowAbout(false), []);
   const closeLikes = useCallback(() => setShowLikes(false), []);
@@ -60,7 +87,29 @@ function App() {
   const rememberIndex = useCallback((index: number) => {
     activeIndexRef.current = index;
     setActiveArticleIndex(index);
+    const article = articlesRef.current[index];
+    if (!article) return;
+    rememberSeen(likeKey(article));
+    setHistory((prev) => {
+      const next = [article, ...prev.filter((item) => likeKey(item) !== likeKey(article))].slice(0, 40);
+      saveHistory(next);
+      return next;
+    });
   }, []);
+
+  const scrollToIndex = useCallback(
+    (index: number) => {
+      if (!containerRef.current || index < 0 || index >= articles.length) return;
+      observerLock.current = Date.now() + 700;
+      rememberIndex(index);
+      containerRef.current.scrollTo({
+        top: index * containerRef.current.clientHeight,
+        behavior: prefersReducedMotion() ? "auto" : "smooth",
+      });
+      document.getElementById(`feed-card-${index}`)?.focus({ preventScroll: true });
+    },
+    [articles.length, rememberIndex]
+  );
 
   const handleObserver = useCallback(
     (entries: IntersectionObserverEntry[]) => {
@@ -71,56 +120,107 @@ function App() {
   );
 
   useEffect(() => {
+    const root = containerRef.current;
+    const target = observerTarget.current;
+    if (!root || !target) return;
     const observer = new IntersectionObserver(handleObserver, {
-      threshold: 0.05,
-      rootMargin: "2500px",
+      root,
+      rootMargin: "100% 0px",
+      threshold: 0.01,
     });
-    if (observerTarget.current) observer.observe(observerTarget.current);
+    observer.observe(target);
     return () => observer.disconnect();
   }, [handleObserver]);
 
   useEffect(() => {
+    const root = containerRef.current;
+    if (!root) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (Date.now() < observerLock.current) return;
+        const best = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!best) return;
+        const index = Number((best.target as HTMLElement).dataset.index);
+        if (Number.isFinite(index) && index !== activeIndexRef.current && index >= 0 && index < articles.length) {
+          rememberIndex(index);
+        }
+      },
+      { root, threshold: [0.6, 0.8] }
+    );
+    root.querySelectorAll<HTMLElement>("[data-feed-card]").forEach((card) => observer.observe(card));
+    return () => observer.disconnect();
+  }, [articles.length, rememberIndex]);
+
+  useEffect(() => {
     if (error || exhausted) return;
-    if (articles.length > 0 && articles.length - activeArticleIndex <= 8) {
-      fetchArticles();
-    }
+    if (articles.length > 0 && articles.length - activeArticleIndex <= 8) fetchArticles();
   }, [activeArticleIndex, articles.length, fetchArticles, error, exhausted]);
 
   useEffect(() => {
-    rememberIndex(0);
+    articlesRef.current = articles;
+  });
+
+  useEffect(() => {
+    activeIndexRef.current = 0;
     containerRef.current?.scrollTo({ top: 0 });
-  }, [topic, currentLanguage.id, rememberIndex]);
+  }, [feedKey]);
+
+  useEffect(() => {
+    activeIndexRef.current = activeArticleIndex;
+  }, [activeArticleIndex]);
+
+  useEffect(() => {
+    if (pendingScroll.current == null || pendingScroll.current >= articles.length) return;
+    const index = pendingScroll.current;
+    pendingScroll.current = null;
+    const behavior = prefersReducedMotion() ? "auto" : "smooth";
+    containerRef.current?.scrollTo({
+      top: index * (containerRef.current?.clientHeight || 0),
+      behavior,
+    });
+    document.getElementById(`feed-card-${index}`)?.focus({ preventScroll: true });
+  }, [articles.length]);
+
+  useEffect(() => {
+    const article = articles[activeArticleIndex];
+    const pageid = article?.pageid ?? (articles.length === 0 ? linkedPage.current : undefined);
+    const href = appArticleHref({
+      origin: window.location.origin,
+      path: window.location.pathname,
+      lang: currentLanguage.id,
+      topic,
+      pageid,
+    });
+    if (href !== window.location.href) window.history.replaceState(null, "", href);
+  }, [activeArticleIndex, articles, currentLanguage.id, topic]);
+
+  useEffect(() => {
+    const onOnline = () => setOnline(true);
+    const offOnline = () => setOnline(false);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", offOnline);
+    const pointer = window.matchMedia("(pointer: coarse)");
+    const syncPointer = () => setCoarsePointer(pointer.matches);
+    syncPointer();
+    pointer.addEventListener("change", syncPointer);
+    return () => {
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", offOnline);
+      pointer.removeEventListener("change", syncPointer);
+    };
+  }, []);
 
   const handleScroll = () => {
     if (!containerRef.current) return;
-    const { scrollTop, clientHeight } = containerRef.current;
-    if (scrollTop > 50 && !hasScrolled) setHasScrolled(true);
-    const index = Math.round(scrollTop / (clientHeight || 1));
-    if (index !== activeIndexRef.current && index >= 0 && index < articles.length) {
-      rememberIndex(index);
-    }
+    if (containerRef.current.scrollTop > 50 && !hasScrolled) setHasScrolled(true);
   };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (
-        event.target instanceof HTMLInputElement ||
-        event.target instanceof HTMLTextAreaElement
-      ) {
-        return;
-      }
-      if (showAbout || showLikes || activeArticleForReader) return;
-
-      const behavior = prefersReducedMotion() ? "auto" : "smooth";
-      const scrollToIndex = (index: number) => {
-        if (!containerRef.current || index < 0 || index >= articles.length) return;
-        if (index === activeIndexRef.current) return;
-        rememberIndex(index);
-        containerRef.current.scrollTo({
-          top: index * containerRef.current.clientHeight,
-          behavior,
-        });
-      };
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      if (showAbout || showLikes || showSearch || showHistory || activeArticleForReader) return;
 
       if (event.key === "ArrowDown" || event.key.toLowerCase() === "j") {
         event.preventDefault();
@@ -133,64 +233,86 @@ function App() {
         event.preventDefault();
         const currentArticle = articles[activeIndexRef.current];
         if (currentArticle) toggleLike(currentArticle);
+      } else if (event.key.toLowerCase() === "n") {
+        if (event.repeat) return;
+        event.preventDefault();
+        const currentArticle = articles[activeIndexRef.current];
+        if (currentArticle) dismissArticle(currentArticle);
       } else if (event.key === "Escape") {
         setShowAbout(false);
         setShowLikes(false);
+        setShowSearch(false);
+        setShowHistory(false);
         setActiveArticleForReader(null);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [articles, showAbout, showLikes, activeArticleForReader, toggleLike, rememberIndex]);
+  }, [articles, showAbout, showLikes, showSearch, showHistory, activeArticleForReader, toggleLike, dismissArticle, scrollToIndex]);
+
+  const showArticle = (article: WikiArticle) => {
+    pendingScroll.current = 0;
+    activeIndexRef.current = 0;
+    setActiveArticleIndex(0);
+    openArticle(article);
+    setShowSearch(false);
+    setShowHistory(false);
+    setShowLikes(false);
+  };
 
   const query = searchQuery.trim().toLowerCase();
+  const collectionNames = Array.from(
+    new Set(likedArticles.flatMap((article) => article.collections ?? []))
+  ).sort((a, b) => a.localeCompare(b));
   const filteredLikedArticles = likedArticles.filter((article) => {
+    if (collectionFilter !== "all" && !(article.collections ?? []).includes(collectionFilter)) return false;
     if (!query) return true;
-    const title = article.title?.toLowerCase() ?? "";
+    const title = articleLabel(article).toLowerCase();
     const extract = article.extract?.toLowerCase() ?? "";
     return title.includes(query) || extract.includes(query);
   });
 
   const handleExport = () => {
-    const simplifiedArticles = likedArticles.map((article) => ({
-      title: article.title,
-      lang: article.lang ?? null,
-      url: article.url,
-      extract: article.extract,
-      thumbnail: article.thumbnail?.source || null,
-    }));
-
-    const dataStr = JSON.stringify(simplifiedArticles, null, 2);
-    const linkElement = document.createElement("a");
-    linkElement.setAttribute(
-      "href",
-      "data:application/json;charset=utf-8," + encodeURIComponent(dataStr)
+    downloadJson(
+      `wikitok-favorites-${new Date().toISOString().split("T")[0]}.json`,
+      likedArticles.map((article) => ({
+        title: article.title,
+        displaytitle: article.displaytitle,
+        lang: article.lang ?? null,
+        url: article.url,
+        extract: article.extract,
+        pageid: article.pageid,
+        thumbnail: article.thumbnail?.source || null,
+        collections: article.collections ?? [],
+      }))
     );
-    linkElement.setAttribute(
-      "download",
-      `wikitok-favorites-${new Date().toISOString().split("T")[0]}.json`
-    );
-    linkElement.click();
   };
 
-  const scrollToTop = () => {
-    rememberIndex(0);
-    containerRef.current?.scrollTo({
-      top: 0,
-      behavior: prefersReducedMotion() ? "auto" : "smooth",
-    });
+  const handleImport = async (file: File) => {
+    try {
+      const parsed = JSON.parse(await file.text()) as unknown;
+      const added = importLikes(parsed);
+      setImportNote(added === 0 ? "Those articles are already in your likes." : `Added ${added} liked articles.`);
+    } catch {
+      setImportNote("That file isn't a WikiTok likes export.");
+    }
   };
+
+  const scrollToTop = () => scrollToIndex(0);
 
   return (
     <div
       id="feed"
       ref={containerRef}
       onScroll={handleScroll}
+      role="feed"
+      aria-busy={loading}
+      aria-label="Wikipedia articles"
       className="h-[100dvh] min-h-[100dvh] w-full bg-black text-white overflow-y-scroll snap-y snap-mandatory hide-scroll relative"
     >
-      <header className="fixed top-0 left-0 right-0 z-40 p-4 flex items-center justify-between pointer-events-none">
-        <div className="pointer-events-auto flex items-center gap-2">
+      <header className="fixed top-0 left-0 right-0 z-40 px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] flex items-center justify-between gap-2 pointer-events-none">
+        <div className="pointer-events-auto flex items-center gap-2 min-w-0">
           <button
             onClick={scrollToTop}
             className="text-2xl font-black text-white drop-shadow-md hover:opacity-85 transition-opacity tracking-tight"
@@ -199,9 +321,9 @@ function App() {
           </button>
         </div>
 
-        <div className="pointer-events-auto hidden sm:flex absolute left-1/2 -translate-x-1/2 top-4 z-10">
+        <div className="pointer-events-auto hidden sm:flex absolute left-1/2 -translate-x-1/2 top-[max(0.75rem,env(safe-area-inset-top))] z-10">
           <TopicSelector
-            topics={TOPICS}
+            topics={[...FEED_TOPICS]}
             activeTopic={topic}
             onSelectTopic={(id) => {
               setTopic(id);
@@ -211,7 +333,21 @@ function App() {
           />
         </div>
 
-        <div className="pointer-events-auto flex items-center gap-2">
+        <div className="pointer-events-auto flex items-center gap-1.5">
+          <button
+            onClick={() => setShowSearch(true)}
+            className="p-2 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 text-white/80"
+            aria-label="Search Wikipedia"
+          >
+            <Search className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowHistory(true)}
+            className="p-2 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 text-white/80"
+            aria-label="Recently viewed"
+          >
+            <History className="w-4 h-4" />
+          </button>
           <button
             onClick={() => setShowAbout(true)}
             className="px-2.5 py-1 rounded-full bg-black/40 hover:bg-black/60 border border-white/10 text-xs text-white/80 hover:text-white transition-all backdrop-blur-md"
@@ -224,7 +360,7 @@ function App() {
           >
             <span>Likes</span>
             {likedArticles.length > 0 && (
-              <span className="w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+              <span className="min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
                 {likedArticles.length > 99 ? "99+" : likedArticles.length}
               </span>
             )}
@@ -233,13 +369,13 @@ function App() {
         </div>
       </header>
 
-      <div className="fixed top-14 left-0 right-0 z-30 sm:hidden flex items-center justify-center pointer-events-none px-4">
-        <div
-          data-topic-scroll
-          className="pointer-events-auto overflow-x-auto max-w-full hide-scroll"
-        >
+      <div
+        className="fixed left-0 right-0 z-30 sm:hidden flex items-center justify-center pointer-events-none px-4"
+        style={{ top: "calc(env(safe-area-inset-top, 0px) + 3.35rem)" }}
+      >
+        <div data-topic-scroll className="pointer-events-auto overflow-x-auto max-w-full hide-scroll">
           <TopicSelector
-            topics={TOPICS}
+            topics={[...FEED_TOPICS]}
             activeTopic={topic}
             onSelectTopic={(id) => {
               setTopic(id);
@@ -253,17 +389,14 @@ function App() {
       {!hasScrolled && articles.length > 0 && (
         <div className="fixed top-[46%] left-1/2 -translate-x-1/2 -translate-y-1/2 z-30 pointer-events-none flex flex-col items-center gap-1 rounded-full bg-black/55 px-3 py-2 text-white/80 animate-bounce">
           <span className="text-[11px] uppercase tracking-wider font-semibold">
-            Swipe up for next
+            {coarsePointer ? "Swipe up for next" : "Scroll for next"}
           </span>
           <ChevronUp className="w-4 h-4" />
         </div>
       )}
 
       {showAbout && (
-        <div
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 fade-in"
-          onClick={closeAbout}
-        >
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 fade-in" onClick={closeAbout}>
           <div
             ref={aboutRef}
             role="dialog"
@@ -273,97 +406,57 @@ function App() {
             className="bg-gray-900 border border-white/10 z-50 p-6 md:p-8 rounded-2xl max-w-md w-full max-h-[85dvh] overflow-y-auto relative shadow-2xl outline-none"
             onClick={(event) => event.stopPropagation()}
           >
-            <button
-              onClick={closeAbout}
-              className="absolute top-4 right-4 p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-              aria-label="Close"
-            >
+            <button onClick={closeAbout} className="absolute top-4 right-4 p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10" aria-label="Close">
               <X className="w-5 h-5" />
             </button>
             <div className="flex items-center gap-2.5 mb-3 pe-8">
-              <h2 id="about-title" className="text-xl md:text-2xl font-bold">
-                About WikiTok
-              </h2>
+              <h2 id="about-title" className="text-xl md:text-2xl font-bold">About WikiTok</h2>
               <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-400 border border-blue-500/20 font-mono font-medium tracking-wide">
                 v{APP_VERSION}
               </span>
             </div>
             <p className="text-gray-300 text-sm md:text-base mb-4 leading-relaxed">
-              A TikTok-style vertical feed for discovering and exploring random Wikipedia articles
-              in multiple languages.
+              A TikTok-style vertical feed for discovering Wikipedia articles in multiple languages.
+              Popular and Today follow what people are reading. The other chips follow Wikipedia's topic index,
+              shuffled each visit.
             </p>
-
+            <label className="flex items-center justify-between gap-3 text-sm text-gray-200 border border-white/10 rounded-xl px-3 py-2 mb-4">
+              <span>Hide sensitive topics</span>
+              <input
+                type="checkbox"
+                checked={hideSensitive}
+                onChange={(event) => {
+                  setHideSensitive(event.target.checked);
+                  saveHideSensitive(event.target.checked);
+                }}
+              />
+            </label>
             <div className="space-y-2 text-sm text-gray-400 border-t border-white/10 pt-4">
               <p>
                 Maintained &amp; updated by{" "}
-                <a
-                  href="https://github.com/KallanX"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-white hover:underline font-medium"
-                >
-                  KallanX
-                </a>
+                <a href="https://github.com/KallanX" target="_blank" rel="noopener noreferrer" className="text-white hover:underline font-medium">KallanX</a>
               </p>
               <p>
                 Originally created with ❤️ by{" "}
-                <a
-                  href="https://x.com/Aizkmusic"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-white hover:underline font-medium"
-                >
-                  @Aizkmusic
-                </a>
+                <a href="https://x.com/Aizkmusic" target="_blank" rel="noopener noreferrer" className="text-white hover:underline font-medium">@Aizkmusic</a>
               </p>
               <p>
                 Check out the code on{" "}
-                <a
-                  href="https://github.com/KallanX/wikitok"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-white hover:underline font-medium"
-                >
-                  GitHub
-                </a>{" "}
+                <a href="https://github.com/KallanX/wikitok" target="_blank" rel="noopener noreferrer" className="text-white hover:underline font-medium">GitHub</a>{" "}
                 (forked from{" "}
-                <a
-                  href="https://github.com/IsaacGemal/wikitok"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-white hover:underline"
-                >
-                  IsaacGemal/wikitok
-                </a>
-                )
-              </p>
-              <p className="pt-2">
-                Support the original creator on{" "}
-                <a
-                  href="https://buymeacoffee.com/aizk"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-white hover:underline font-medium"
-                >
-                  Buy Me a Coffee
-                </a>
-                ! ☕
+                <a href="https://github.com/IsaacGemal/wikitok" target="_blank" rel="noopener noreferrer" className="text-white hover:underline">IsaacGemal/wikitok</a>)
               </p>
             </div>
-
-            <div className="mt-6 pt-4 border-t border-white/10 text-xs text-white/40 flex justify-between">
+            <div className="mt-6 pt-4 border-t border-white/10 text-xs text-white/40 flex justify-between gap-3">
               <span>Keyboard: ↓/↑ or J/K to browse</span>
-              <span>L to like</span>
+              <span>L like · N hide</span>
             </div>
           </div>
         </div>
       )}
 
       {showLikes && (
-        <div
-          className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 fade-in"
-          onClick={closeLikes}
-        >
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-4 fade-in" onClick={closeLikes}>
           <div
             ref={likesRef}
             role="dialog"
@@ -373,102 +466,108 @@ function App() {
             className="bg-gray-900 border border-white/10 z-50 p-6 rounded-2xl w-full max-w-2xl h-[80dvh] max-h-[85dvh] flex flex-col relative shadow-2xl outline-none"
             onClick={(event) => event.stopPropagation()}
           >
-            <button
-              onClick={closeLikes}
-              className="absolute top-4 end-4 p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10 transition-colors"
-              aria-label="Close"
-            >
+            <button onClick={closeLikes} className="absolute top-4 end-4 p-1.5 rounded-full text-white/60 hover:text-white hover:bg-white/10" aria-label="Close">
               <X className="w-5 h-5" />
             </button>
-
-            <div className="flex justify-between items-center mb-4 pe-10">
+            <div className="flex justify-between items-center mb-4 pe-10 gap-2">
               <h2 id="likes-title" className="text-xl font-bold flex items-center gap-2">
                 <span>Liked Articles</span>
-                <span className="text-xs font-normal text-white/50 bg-white/10 px-2 py-0.5 rounded-full">
-                  {likedArticles.length}
-                </span>
+                <span className="text-xs font-normal text-white/50 bg-white/10 px-2 py-0.5 rounded-full">{likedArticles.length}</span>
               </h2>
-              {likedArticles.length > 0 && (
-                <button
-                  onClick={handleExport}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium transition-colors"
-                  title="Export liked articles to JSON"
-                >
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Export</span>
+              <div className="flex gap-2">
+                {likedArticles.length > 0 && (
+                  <button onClick={handleExport} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium" title="Export liked articles to JSON">
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Export</span>
+                  </button>
+                )}
+                <button onClick={() => importRef.current?.click()} className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-white text-xs font-medium">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Import</span>
                 </button>
-              )}
+              </div>
             </div>
-
-            <div className="relative mb-4">
-              <label htmlFor="likes-search" className="sr-only">
-                Search liked articles
-              </label>
+            {storageWarning && <p className="text-xs text-amber-300 mb-3">{storageWarning}</p>}
+            {importNote && <p className="text-xs text-white/70 mb-3">{importNote}</p>}
+            <input
+              ref={importRef}
+              type="file"
+              accept="application/json,.json"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void handleImport(file);
+                event.target.value = "";
+              }}
+            />
+            <div className="relative mb-3">
+              <label htmlFor="likes-search" className="sr-only">Search liked articles</label>
               <input
                 id="likes-search"
                 type="text"
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search liked articles..."
-                className="w-full bg-gray-800 text-white px-4 py-2.5 ps-10 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 border border-white/5 text-sm"
+                className="w-full bg-gray-800 text-white px-4 py-2.5 ps-10 rounded-xl focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 border border-white/5 text-sm"
               />
-              <Search className="w-4 h-4 text-white/50 absolute start-3.5 top-1/2 transform -translate-y-1/2" />
+              <Search className="w-4 h-4 text-white/50 absolute start-3.5 top-1/2 -translate-y-1/2" />
             </div>
-
+            <div className="flex gap-2 overflow-x-auto pb-3">
+              <button type="button" onClick={() => setCollectionFilter("all")} className={`px-2.5 py-1 rounded-full text-xs ${collectionFilter === "all" ? "bg-white text-black" : "bg-white/10"}`}>All</button>
+              {collectionNames.map((name) => (
+                <button key={name} type="button" onClick={() => setCollectionFilter(name)} className={`px-2.5 py-1 rounded-full text-xs ${collectionFilter === name ? "bg-white text-black" : "bg-white/10"}`}>{name}</button>
+              ))}
+            </div>
             <div className="flex-1 overflow-y-auto min-h-0 space-y-3 pe-1">
               {filteredLikedArticles.length === 0 ? (
                 <div className="h-48 flex items-center justify-center text-white/50 text-sm">
-                  {searchQuery ? "No matches found." : "No liked articles yet."}
+                  {searchQuery || collectionFilter !== "all" ? "No matches found." : "No liked articles yet."}
                 </div>
               ) : (
                 filteredLikedArticles.map((article) => {
                   const languageName = LANGUAGES.find((language) => language.id === article.lang)?.name;
                   return (
-                    <div
-                      key={likeKey(article)}
-                      className="flex gap-4 items-start p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors group"
-                    >
+                    <div key={likeKey(article)} className="flex gap-4 items-start p-3 rounded-xl bg-white/5 hover:bg-white/10 transition-colors">
                       {article.thumbnail?.source && (
                         <img
                           src={article.thumbnail.source}
                           alt=""
                           className="w-16 h-16 object-cover rounded-lg flex-shrink-0 cursor-pointer"
-                          onClick={() => {
-                            setActiveArticleForReader(article);
-                            setShowLikes(false);
-                          }}
+                          onClick={() => setActiveArticleForReader(article)}
                         />
                       )}
                       <div className="flex-1 min-w-0">
                         <div className="flex justify-between items-start gap-2">
-                          <button
-                            onClick={() => {
-                              setActiveArticleForReader(article);
-                              setShowLikes(false);
-                            }}
-                            className="font-bold text-sm text-start hover:text-blue-300 transition-colors truncate"
-                          >
-                            {article.title}
+                          <button onClick={() => setActiveArticleForReader(article)} className="font-bold text-sm text-start hover:text-blue-300 truncate">
+                            {articleLabel(article)}
                           </button>
-                          <button
-                            onClick={() => toggleLike(article)}
-                            className="text-white/40 hover:text-red-400 p-1 rounded-full transition-colors flex-shrink-0"
-                            aria-label="Remove from likes"
-                          >
+                          <button onClick={() => toggleLike(article)} className="text-white/40 hover:text-red-400 p-1 rounded-full" aria-label="Remove from likes">
                             <X className="w-4 h-4" />
                           </button>
                         </div>
-                        {languageName && (
-                          <p className="text-[10px] uppercase tracking-wide text-white/40 mt-0.5">
-                            {languageName}
-                          </p>
-                        )}
+                        {languageName && <p className="text-[10px] uppercase tracking-wide text-white/40 mt-0.5">{languageName}</p>}
                         <p className="text-xs text-white/70 line-clamp-2 mt-1">{article.extract}</p>
-                        <button
-                          onClick={() => {
-                            setActiveArticleForReader(article);
-                            setShowLikes(false);
+                        <form
+                          className="mt-2 flex gap-2"
+                          onSubmit={(event) => {
+                            event.preventDefault();
+                            const data = new FormData(event.currentTarget);
+                            const name = String(data.get("collection") || "");
+                            if (!name.trim()) return;
+                            setCollections(article, [...(article.collections ?? []), name]);
+                            event.currentTarget.reset();
                           }}
+                        >
+                          <label className="sr-only" htmlFor={`collection-${likeKey(article)}`}>Add to collection</label>
+                          <input
+                            id={`collection-${likeKey(article)}`}
+                            name="collection"
+                            placeholder="Add to collection"
+                            className="flex-1 bg-black/30 text-xs text-white px-2 py-1 rounded-lg border border-white/10"
+                          />
+                        </form>
+                        <button
+                          onClick={() => setActiveArticleForReader(article)}
                           className="inline-flex items-center gap-1 text-[11px] text-blue-400 hover:text-blue-300 mt-2 font-medium"
                         >
                           <BookOpen className="w-3 h-3" />
@@ -484,19 +583,48 @@ function App() {
         </div>
       )}
 
+      {showSearch && (
+        <SearchDialog
+          language={currentLanguage}
+          hideSensitive={hideSensitive}
+          onClose={() => setShowSearch(false)}
+          onOpen={showArticle}
+        />
+      )}
+      {showHistory && (
+        <HistoryDialog articles={history} onClose={() => setShowHistory(false)} onOpen={showArticle} />
+      )}
+
       {articles.map((article, index) => {
         const key = `${article.lang ?? "article"}-${article.pageid}`;
         if (Math.abs(index - activeArticleIndex) > RENDER_WINDOW) {
           return (
             <div
               key={key}
+              data-feed-card
+              data-index={index}
               className="h-[100dvh] min-h-[100dvh] w-full snap-start"
               aria-hidden="true"
             />
           );
         }
         return (
-          <WikiCard key={key} article={article} isActive={index === activeArticleIndex} />
+          <WikiCard
+            key={key}
+            article={article}
+            index={index}
+            topic={topic}
+            hideSensitive={hideSensitive}
+            isActive={index === activeArticleIndex}
+            onDismiss={dismissArticle}
+            onOpenArticle={openArticle}
+            onRelated={(current) => {
+              pendingScroll.current = index + 1;
+              void loadRelated(current).then((added) => {
+                if (added === 0) pendingScroll.current = null;
+              });
+            }}
+          />
         );
       })}
 
@@ -504,12 +632,10 @@ function App() {
 
       {exhausted && (
         <div className="h-[100dvh] min-h-[100dvh] w-full snap-start flex flex-col items-center justify-center gap-3 text-white/70 px-6 text-center">
-          <p className="text-sm">You've reached the end of this topic.</p>
-          <button
-            type="button"
-            onClick={() => setTopic("all")}
-            className="px-4 py-2 rounded-full bg-white text-black text-sm font-semibold"
-          >
+          <p className="text-sm">
+            {articles.length === 0 ? "Nothing else turned up for this topic." : "You've reached the end of this topic."}
+          </p>
+          <button type="button" onClick={() => setTopic("all")} className="px-4 py-2 rounded-full bg-white text-black text-sm font-semibold">
             Back to random
           </button>
         </div>
@@ -525,7 +651,18 @@ function App() {
       {loading && articles.length === 0 && !error && (
         <div className="h-[100dvh] w-full flex flex-col items-center justify-center gap-3 text-white/80">
           <Loader2 className="h-8 w-8 animate-spin text-blue-400" />
-          <span className="text-sm font-medium tracking-wide">Discovering articles...</span>
+          <span className="text-sm font-medium tracking-wide">
+            {online ? "Discovering articles..." : "You're offline. Reconnect to load new articles."}
+          </span>
+        </div>
+      )}
+
+      {!loading && !online && articles.length === 0 && (
+        <div className="h-[100dvh] w-full flex flex-col items-center justify-center gap-3 text-white/80 px-6 text-center">
+          <p className="text-sm">You're offline. Saved likes and history are still on this device.</p>
+          <button type="button" onClick={() => setShowLikes(true)} className="px-4 py-2 rounded-full bg-white text-black text-sm font-semibold">
+            Open likes
+          </button>
         </div>
       )}
 
@@ -537,12 +674,8 @@ function App() {
               : "fixed bottom-[max(4.5rem,env(safe-area-inset-bottom))] left-1/2 -translate-x-1/2 z-30 max-w-sm w-[calc(100%-2rem)]"
           } flex flex-col items-center justify-center gap-3 text-center text-white/80 px-6`}
         >
-          <p className="text-sm">{error}</p>
-          <button
-            type="button"
-            onClick={retry}
-            className="px-4 py-2 rounded-full bg-white text-black text-sm font-semibold"
-          >
+          <p className="text-sm">{online ? error : "You're offline. Reconnect, then try again."}</p>
+          <button type="button" onClick={retry} className="px-4 py-2 rounded-full bg-white text-black text-sm font-semibold">
             Try again
           </button>
         </div>
@@ -551,9 +684,16 @@ function App() {
       {activeArticleForReader && (
         <ReaderModal
           article={activeArticleForReader}
+          hideSensitive={hideSensitive}
+          topic={topic}
+          onOpenArticle={(article) => {
+            openArticle(article);
+            setActiveArticleForReader(article);
+          }}
           onClose={() => setActiveArticleForReader(null)}
         />
       )}
+      <UpdatePrompt />
     </div>
   );
 }

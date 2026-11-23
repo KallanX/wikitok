@@ -4,21 +4,24 @@ A TikTok-style interface for exploring random Wikipedia articles in multiple lan
 
 ## Features
 
-- Vertical scrolling feed of random Wikipedia articles
+- Vertical feed of Wikipedia articles, including random, popular, on-this-day, and topic lanes
 - Support for 48 languages and Chinese, Wu, Gan, and Cantonese variants
-- Article previews with images, titles and excerpts
-- Share articles directly or copy links
-- Language selector with country flags
+- Article previews with images, titles, and excerpts
+- In-app reader with contents, gallery, related pages, and other languages
+- Share links that reopen the same article in WikiTok
+- Search, likes with collections and import/export, and a recently viewed list
+- Language selector with search, matched to the browser on the first visit
 - Preloading of images and content for smooth scrolling
 - Responsive design that works on mobile and desktop
-- Progressive Web App (PWA) support for installing as a standalone app
+- Progressive Web App (PWA) support, including an offline shell and an update prompt
 
 ## Tech Stack
 
-- React 18
-- TypeScript
-- Tailwind CSS
-- Vite
+- React 19
+- TypeScript 7 (`tsc`) with the TypeScript 6 API kept for ESLint, which does not understand TypeScript 7 yet
+- Tailwind CSS 4
+- Vite 8
+- Bun 1.4 static server for production headers and rate limits
 
 ## Development
 
@@ -36,7 +39,9 @@ bun install
 bun run dev
 ```
 
-No backend required!
+`bun run dev` is the Vite app. Wikipedia is called from the browser.
+
+Production uses `frontend/server.ts`. That process serves the built files, adds the content security policy (including Wikipedia audio and video), rate-limits clients, and writes access logs. Public IP addresses are stored with the last segment removed. City lookups use `geoip-lite`. Refresh that database with `bun run update-geoip` in `/frontend` when you have a MaxMind license key, or pass `MAXMIND_LICENSE_KEY` to the Docker build.
 
 ## Deployment
 

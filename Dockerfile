@@ -1,6 +1,6 @@
 # Multi-stage build for WikiTok frontend
 # Stage 1: Build static assets
-FROM oven/bun:1-alpine AS builder
+FROM oven/bun:1.4.5-alpine AS builder
 
 WORKDIR /app
 
@@ -17,7 +17,7 @@ COPY frontend/ ./
 RUN bun run build
 
 # Stage 2: Production runtime using Bun
-FROM oven/bun:1-alpine AS runner
+FROM oven/bun:1.4.5-alpine AS runner
 
 WORKDIR /app
 

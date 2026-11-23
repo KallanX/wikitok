@@ -134,7 +134,8 @@ describe("useWikiArticles", () => {
     });
     const topicCall = pending.find((entry) => entry.url.includes("gsrsearch"));
     expect(topicCall).toBeTruthy();
-    expect(new URL(topicCall!.url).searchParams.get("gsrsearch")).toBe("科学");
+    expect(new URL(topicCall!.url).searchParams.get("gsrsearch")).toBe("articletopic:STEM");
+    expect(new URL(topicCall!.url).searchParams.get("gsrsort")).toBe("random");
 
     pending.forEach((entry) => entry.reject(new Error("offline")));
 

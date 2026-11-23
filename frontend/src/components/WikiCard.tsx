@@ -8,31 +8,31 @@ import {
   BookOpen,
   ExternalLink,
   Loader2,
+  EyeOff,
+  Layers,
 } from "lucide-react";
 import { useLikedArticles } from "../hooks/useLikedArticles";
 import { ReaderModal } from "./ReaderModal";
 import { useShareArticle } from "../hooks/useShareArticle";
 import { ambientThumb } from "../lib/thumb";
 import { isRtlLanguage, languageIdFromArticle } from "../lib/language";
+import { appArticleHref } from "../lib/variantUrl";
+import type { WikiArticle } from "../lib/article";
 import "../assets/heartAnimation.css";
 
-export interface WikiArticle {
-  title: string;
-  displaytitle: string;
-  extract: string;
-  pageid: number;
-  url: string;
-  lang?: string;
-  thumbnail?: {
-    source: string;
-    width: number;
-    height: number;
-  };
-}
+export type { WikiArticle };
+
+const SPEEDS = [0.85, 1, 1.25, 1.5];
 
 interface WikiCardProps {
   article: WikiArticle;
   isActive?: boolean;
+  index: number;
+  topic: string;
+  hideSensitive: boolean;
+  onRelated: (article: WikiArticle) => void;
+  onDismiss: (article: WikiArticle) => void;
+  onOpenArticle: (article: WikiArticle) => void;
 }
 
 interface FloatingReaction {
@@ -73,10 +73,21 @@ function whenVoicesReady(): Promise<void> {
   });
 }
 
-export function WikiCard({ article, isActive }: WikiCardProps) {
+export function WikiCard({
+  article,
+  isActive,
+  index,
+  topic,
+  hideSensitive,
+  onRelated,
+  onDismiss,
+  onOpenArticle,
+}: WikiCardProps) {
   const [imageLoaded, setImageLoaded] = useState(false);
   const [imageFailed, setImageFailed] = useState(false);
+  const [useCors, setUseCors] = useState(true);
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [speedIndex, setSpeedIndex] = useState(1);
   const [showReader, setShowReader] = useState(false);
   const [floatingReactions, setFloatingReactions] = useState<FloatingReaction[]>([]);
   const [ambientSrc, setAmbientSrc] = useState(() =>
@@ -91,6 +102,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
   const lastTapRef = useRef<number>(0);
   const lastTouchTimeRef = useRef<number>(0);
   const lastDoubleTapTimeRef = useRef<number>(0);
+  const touchPoint = useRef({ x: 0, y: 0, moved: false });
   const cardRef = useRef<HTMLDivElement>(null);
   const speakingRef = useRef(false);
   const reactionTimers = useRef<number[]>([]);
@@ -107,6 +119,14 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
   useEffect(() => {
     if (!isActive) stopOwnSpeech();
   }, [isActive, stopOwnSpeech]);
+
+  useEffect(() => {
+    if (!isSpeaking || typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const timer = window.setInterval(() => {
+      if (window.speechSynthesis.speaking) window.speechSynthesis.resume();
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, [isSpeaking]);
 
   useEffect(() => {
     const timers = reactionTimers.current;
@@ -138,6 +158,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
       `${article.displaytitle}. ${article.extract || ""}`
     );
     utterance.lang = articleLanguage;
+    utterance.rate = SPEEDS[speedIndex] ?? 1;
     const voice = pickVoice(articleLanguage);
     if (voice) utterance.voice = voice;
     utterance.onend = () => {
@@ -177,6 +198,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
   const handleDoubleTap = (clientX?: number, clientY?: number) => {
     const now = Date.now();
     if (now - lastDoubleTapTimeRef.current < 450) return;
+    if (isLiked(article)) return;
     lastDoubleTapTimeRef.current = now;
 
     let x = clientX;
@@ -206,17 +228,21 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
     return undefined;
   });
 
-  useEffect(() => {
+  const thumbSource = article.thumbnail?.source ?? "";
+  const [trackedSource, setTrackedSource] = useState(thumbSource);
+  if (trackedSource !== thumbSource) {
+    setTrackedSource(thumbSource);
     setImageLoaded(false);
     setImageFailed(false);
-    setIsTransparent(isSvg(article.thumbnail?.source));
-    setAmbientSrc(article.thumbnail?.source ? ambientThumb(article.thumbnail.source) : "");
-    if (article.thumbnail?.width && article.thumbnail?.height) {
-      setAspectRatio(`${article.thumbnail.width} / ${article.thumbnail.height}`);
-    } else {
-      setAspectRatio(undefined);
-    }
-  }, [article.thumbnail?.source, article.thumbnail?.width, article.thumbnail?.height]);
+    setUseCors(true);
+    setIsTransparent(isSvg(thumbSource));
+    setAmbientSrc(thumbSource ? ambientThumb(thumbSource) : "");
+    setAspectRatio(
+      article.thumbnail?.width && article.thumbnail?.height
+        ? `${article.thumbnail.width} / ${article.thumbnail.height}`
+        : undefined
+    );
+  }
 
   const handleImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
     setImageLoaded(true);
@@ -247,8 +273,26 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
     }
   };
 
+  const handleTouchStart = (event: React.TouchEvent) => {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    touchPoint.current = { x: touch.clientX, y: touch.clientY, moved: false };
+  };
+
+  const handleTouchMove = (event: React.TouchEvent) => {
+    const touch = event.changedTouches[0];
+    if (!touch) return;
+    const dx = touch.clientX - touchPoint.current.x;
+    const dy = touch.clientY - touchPoint.current.y;
+    if (dx * dx + dy * dy > 144) touchPoint.current.moved = true;
+  };
+
   const handleTouchEnd = (event: React.TouchEvent) => {
     lastTouchTimeRef.current = Date.now();
+    if (touchPoint.current.moved) {
+      lastTapRef.current = 0;
+      return;
+    }
     if ((event.target as HTMLElement)?.closest("button, a, input")) return;
     const now = Date.now();
     if (now - lastTapRef.current < 300) {
@@ -262,10 +306,20 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
 
   const handleShare = (event?: React.MouseEvent) => {
     event?.stopPropagation();
+    const shareUrl =
+      typeof window === "undefined"
+        ? article.url
+        : appArticleHref({
+            origin: window.location.origin,
+            path: window.location.pathname,
+            lang: article.lang || articleLanguage,
+            topic,
+            pageid: article.pageid,
+          });
     void share({
       title: article.displaytitle,
       text: article.extract || "",
-      url: article.url,
+      url: shareUrl,
     });
   };
 
@@ -278,9 +332,17 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
   return (
     <div
       ref={cardRef}
+      id={`feed-card-${index}`}
+      tabIndex={-1}
+      data-feed-card
+      data-index={index}
+      role="article"
+      aria-label={article.displaytitle}
       lang={articleLanguage}
       dir={isRtlLanguage(articleLanguage) ? "rtl" : "ltr"}
-      className="h-[100dvh] min-h-[100dvh] w-full flex flex-col justify-between snap-start relative overflow-hidden bg-black select-none pt-26 sm:pt-20 md:pt-18"
+      className="h-[100dvh] min-h-[100dvh] w-full flex flex-col justify-between snap-start relative overflow-hidden bg-black select-none pt-[calc(6.75rem+env(safe-area-inset-top,0px))] sm:pt-20 md:pt-18 outline-none focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-300"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
       onDoubleClick={(event) => {
         if (Date.now() - lastTouchTimeRef.current < 600) return;
         if ((event.target as HTMLElement)?.closest("button, a, input")) return;
@@ -347,7 +409,7 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
             <img
               loading={isActive ? "eager" : "lazy"}
               fetchPriority={isActive ? "high" : "auto"}
-              crossOrigin="anonymous"
+              crossOrigin={useCors ? "anonymous" : undefined}
               src={article.thumbnail.source}
               alt={article.displaytitle}
               width={article.thumbnail.width}
@@ -357,6 +419,11 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
               } ${imageLoaded ? "opacity-100" : "opacity-0"}`}
               onLoad={handleImageLoad}
               onError={() => {
+                if (useCors) {
+                  setUseCors(false);
+                  setImageLoaded(false);
+                  return;
+                }
                 setImageFailed(true);
                 setImageLoaded(true);
               }}
@@ -384,6 +451,18 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
             </button>
 
             <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setSpeedIndex((current) => (current + 1) % SPEEDS.length);
+                }}
+                className="px-2.5 py-2 rounded-full bg-white/10 backdrop-blur-md hover:bg-white/20 text-white/90 text-[11px] font-semibold"
+                aria-label={`Playback speed ${SPEEDS[speedIndex]} times`}
+                title="Playback speed"
+              >
+                {SPEEDS[speedIndex]}×
+              </button>
+
               <button
                 onClick={toggleSpeech}
                 className={`p-2.5 rounded-full backdrop-blur-md transition-all ${
@@ -447,6 +526,22 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
               <BookOpen className="w-4 h-4" />
               <span>Read article</span>
             </button>
+            <button
+              type="button"
+              onClick={() => onRelated(article)}
+              className="inline-flex items-center gap-1 text-xs text-white/70 hover:text-white transition-colors"
+            >
+              <Layers className="w-3.5 h-3.5" />
+              <span>Related</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onDismiss(article)}
+              className="inline-flex items-center gap-1 text-xs text-white/50 hover:text-white transition-colors"
+            >
+              <EyeOff className="w-3.5 h-3.5" />
+              <span>Not interested</span>
+            </button>
             <a
               href={article.url}
               target="_blank"
@@ -473,7 +568,14 @@ export function WikiCard({ article, isActive }: WikiCardProps) {
         </div>
       </div>
 
-      {showReader && <ReaderModal article={article} onClose={() => setShowReader(false)} />}
+      {showReader && (
+        <ReaderModal
+          article={article}
+          hideSensitive={hideSensitive}
+          onOpenArticle={onOpenArticle}
+          onClose={() => setShowReader(false)}
+        />
+      )}
     </div>
   );
 }

@@ -130,3 +130,51 @@ export function prepareWikipediaHtml(rawHtml: string, articleUrl: string): strin
   const output = doc.querySelector(".mw-parser-output");
   return output ? output.innerHTML : doc.body.innerHTML;
 }
+
+export interface WikiHeading {
+  id: string;
+  text: string;
+  level: number;
+}
+
+export function extractOutline(html: string): WikiHeading[] {
+  if (typeof DOMParser === "undefined" || !html) return [];
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const headings: WikiHeading[] = [];
+  doc.querySelectorAll("h2, h3").forEach((heading) => {
+    const id = heading.id || heading.querySelector("[id]")?.id || "";
+    const text = (heading.textContent || "").replace(/\[edit\]/gi, "").trim();
+    if (!id || !text) return;
+    headings.push({ id, text, level: heading.tagName === "H2" ? 2 : 3 });
+  });
+  return headings;
+}
+
+export function extractGallery(html: string): { src: string; alt: string }[] {
+  if (typeof DOMParser === "undefined" || !html) return [];
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  const seen = new Set<string>();
+  const images: { src: string; alt: string }[] = [];
+  doc.querySelectorAll("img").forEach((img) => {
+    const src = img.getAttribute("src");
+    if (!src || src.startsWith("data:") || seen.has(src)) return;
+    seen.add(src);
+    images.push({ src, alt: img.getAttribute("alt") || "" });
+  });
+  return images.slice(0, 12);
+}
+
+export function titleFromWikiHref(href: string, articleUrl: string): string | null {
+  try {
+    const base = new URL(articleUrl);
+    const url = new URL(href, base);
+    if (url.host !== base.host) return null;
+    const path = decodeURIComponent(url.pathname);
+    if (!path.startsWith("/wiki/")) return null;
+    const slug = path.slice("/wiki/".length);
+    if (!slug || /^(Special|File|Category|Help|Wikipedia|Portal|Template):/i.test(slug)) return null;
+    return slug.replace(/_/g, " ");
+  } catch {
+    return null;
+  }
+}

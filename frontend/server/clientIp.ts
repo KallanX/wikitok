@@ -168,3 +168,22 @@ export function resolveClientIp(options: {
 export function isPrivateIp(ip: string): boolean {
   return isLoopback(ip) || isLinkLocal(ip) || isUniqueLocal(ip);
 }
+
+/** Keep public addresses coarse in logs. Private addresses stay intact for local debugging. */
+export function redactIp(ip: string): string {
+  const normalized = normalizeIp(ip);
+  if (!normalized || !isValidIp(normalized) || isPrivateIp(normalized)) {
+    return normalized || ip || "unknown";
+  }
+  if (isIpv4(normalized)) {
+    const parts = normalized.split(".");
+    parts[3] = "0";
+    return parts.join(".");
+  }
+  const parts = expandIpv6(normalized);
+  if (!parts) return "unknown";
+  return `${parts
+    .slice(0, 3)
+    .map((part) => part.toString(16))
+    .join(":")}::`;
+}

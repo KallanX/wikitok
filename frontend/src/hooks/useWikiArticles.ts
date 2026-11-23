@@ -1,17 +1,21 @@
 import { useState, useCallback, useRef, useEffect } from "react";
 import { useLocalization } from "./useLocalization";
-import type { WikiArticle } from "../components/WikiCard";
-import type { Language } from "../languages";
-import { topicSearchTerm } from "../lib/topics";
-
-const FETCH_TIMEOUT_MS = 12_000;
-const RANDOM_ATTEMPTS = 3;
-const TOPIC_PAGE_ATTEMPTS = 6;
+import type { WikiArticle } from "../lib/article";
+import { likeKey } from "../lib/likeKey";
+import { languageFromId } from "../lib/language";
+import { loadHidden, loadSeen, rememberHidden } from "../lib/readingMemory";
+import { readFeedLocation } from "../lib/variantUrl";
+import {
+  fetchArticleById,
+  fetchRelatedArticles,
+  loadFeed,
+  WikiRequestError,
+} from "../lib/wikiFeed";
+import { isFeedTopic } from "../lib/topics";
 
 const preloadImage = (src: string, timeoutMs = 3000): Promise<void> => {
   return new Promise((resolve) => {
     const img = new Image();
-    img.crossOrigin = "anonymous";
     const timer = setTimeout(() => resolve(), timeoutMs);
     const done = () => {
       clearTimeout(timer);
@@ -23,143 +27,52 @@ const preloadImage = (src: string, timeoutMs = 3000): Promise<void> => {
   });
 };
 
-interface RawWikiPage {
-  title: string;
-  varianttitles?: Record<string, string>;
-  extract?: string;
-  pageid: number;
-  thumbnail?: {
-    source: string;
-    width: number;
-    height: number;
-  };
-  canonicalurl?: string;
+function initialTopic(): string {
+  if (typeof window === "undefined") return "all";
+  const topic = readFeedLocation(window.location.search).topic;
+  return topic && isFeedTopic(topic) ? topic : "all";
 }
 
-interface BatchResult {
-  articles: WikiArticle[];
-  nextOffset: number | null;
+function initialPageId(): number | null {
+  if (typeof window === "undefined") return null;
+  return readFeedLocation(window.location.search).pageid ?? null;
 }
 
-function takeUnique(batches: WikiArticle[][], seen: Set<number>): WikiArticle[] {
-  const unique: WikiArticle[] = [];
-  const local = new Set<number>();
-  for (const batch of batches) {
-    for (const article of batch) {
-      if (seen.has(article.pageid) || local.has(article.pageid)) continue;
-      local.add(article.pageid);
-      unique.push(article);
-    }
-  }
-  return unique;
-}
-
-async function fetchBatch(
-  lang: Language,
-  activeTopic: string,
-  offset: number,
-  signal: AbortSignal,
-  seen: Set<number>
-): Promise<BatchResult> {
-  const params: Record<string, string> = {
-    action: "query",
-    format: "json",
-    prop: "extracts|info|pageimages",
-    inprop: "url|varianttitles",
-    exintro: "1",
-    exlimit: "max",
-    exsentences: "6",
-    explaintext: "1",
-    piprop: "thumbnail",
-    pithumbsize: "800",
-    pilimit: "max",
-    origin: "*",
-    variant: lang.id,
-  };
-
-  if (activeTopic === "all") {
-    params.generator = "random";
-    params.grnnamespace = "0";
-    params.grnlimit = "20";
-  } else {
-    params.generator = "search";
-    params.gsrsearch = topicSearchTerm(activeTopic, lang.id);
-    params.gsrnamespace = "0";
-    params.gsrlimit = "20";
-    params.gsroffset = String(offset);
-  }
-
-  const response = await fetch(`${lang.api}${new URLSearchParams(params).toString()}`, {
-    signal,
-  });
-  if (!response.ok) {
-    throw new Error(`Wikipedia responded with ${response.status}`);
-  }
-  const data = await response.json();
-  if (data?.error) {
-    throw new Error(data.error.info || "Wikipedia request failed");
-  }
-
-  if (!data?.query?.pages) {
-    return { articles: [], nextOffset: activeTopic === "all" ? offset : null };
-  }
-
-  const rawPages = Object.values(data.query.pages) as RawWikiPage[];
-  const articles = rawPages
-    .map(
-      (page): WikiArticle => ({
-        title: page.title,
-        displaytitle: page.varianttitles?.[lang.id] || page.title || "Untitled",
-        extract: page.extract || "",
-        pageid: page.pageid,
-        lang: lang.id,
-        thumbnail: page.thumbnail,
-        url: page.canonicalurl || `${lang.article}${encodeURIComponent(page.title)}`,
-      })
-    )
-    .filter(
-      (article) =>
-        Boolean(article.thumbnail?.source) &&
-        Boolean(article.url) &&
-        article.extract.trim().length > 20 &&
-        !seen.has(article.pageid)
-    );
-
-  let nextOffset: number | null = null;
-  if (activeTopic !== "all") {
-    const cont = data?.continue?.gsroffset;
-    if (typeof cont === "number" && Number.isFinite(cont)) nextOffset = cont;
-    else if (typeof cont === "string" && cont !== "" && Number.isFinite(Number(cont))) {
-      nextOffset = Number(cont);
-    }
-  }
-
-  return { articles, nextOffset };
-}
-
-export function useWikiArticles() {
+export function useWikiArticles(hideSensitive = true) {
   const [articles, setArticles] = useState<WikiArticle[]>([]);
   const [loading, setLoading] = useState(true);
   const [isFetchingMore, setIsFetchingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [exhausted, setExhausted] = useState(false);
-  const [topic, setTopic] = useState("all");
+  const [topic, setTopic] = useState(initialTopic);
 
   const seenPageIds = useRef<Set<number>>(new Set());
+  const hiddenKeys = useRef<Set<string>>(new Set(loadHidden()));
   const isFetchingRef = useRef(false);
   const generationRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
-  const offsetRef = useRef(0);
   const exhaustedRef = useRef(false);
   const errorRef = useRef<string | null>(null);
   const articlesRef = useRef(articles);
-  articlesRef.current = articles;
-
+  const pendingPageId = useRef<number | null>(initialPageId());
+  const hideSensitiveRef = useRef(hideSensitive);
   const { currentLanguage } = useLocalization();
   const languageRef = useRef(currentLanguage);
   const topicRef = useRef(topic);
-  languageRef.current = currentLanguage;
-  topicRef.current = topic;
+
+  useEffect(() => {
+    articlesRef.current = articles;
+    hideSensitiveRef.current = hideSensitive;
+    languageRef.current = currentLanguage;
+    topicRef.current = topic;
+  });
+
+  const remember = useCallback((batch: WikiArticle[]) => {
+    for (const article of batch) seenPageIds.current.add(article.pageid);
+    batch.slice(0, 4).forEach((article) => {
+      if (article.thumbnail?.source) void preloadImage(article.thumbnail.source);
+    });
+  }, []);
 
   const fetchArticles = useCallback(async (isInitial = false) => {
     if (isFetchingRef.current) return;
@@ -175,84 +88,83 @@ export function useWikiArticles() {
 
     const controller = new AbortController();
     abortRef.current = controller;
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
     const stillCurrent = () => generationRef.current === gen;
 
     try {
-      let collected: WikiArticle[] = [];
-      let reachedEnd = false;
-
-      if (activeTopic === "all") {
-        for (let attempt = 0; attempt < RANDOM_ATTEMPTS && collected.length === 0; attempt += 1) {
-          const [first, second] = await Promise.all([
-            fetchBatch(lang, activeTopic, 0, controller.signal, seenPageIds.current),
-            fetchBatch(lang, activeTopic, 0, controller.signal, seenPageIds.current),
-          ]);
-          if (!stillCurrent()) return;
-          collected = takeUnique([first.articles, second.articles], seenPageIds.current);
-        }
-      } else {
-        let offset = offsetRef.current;
-        for (
-          let attempt = 0;
-          attempt < TOPIC_PAGE_ATTEMPTS && collected.length < 8 && !reachedEnd;
-          attempt += 1
-        ) {
-          const batch = await fetchBatch(lang, activeTopic, offset, controller.signal, seenPageIds.current);
-          if (!stillCurrent()) return;
-          collected = takeUnique([collected, batch.articles], seenPageIds.current);
-          if (batch.nextOffset == null || batch.nextOffset === offset) {
-            reachedEnd = true;
-            break;
-          }
-          offset = batch.nextOffset;
-        }
-        if (stillCurrent()) offsetRef.current = offset;
+      const pinnedId = isInitial ? pendingPageId.current : null;
+      pendingPageId.current = null;
+      let pinned: WikiArticle | null = null;
+      if (pinnedId) {
+        pinned = await fetchArticleById(lang, pinnedId, controller.signal, false);
+        if (!stillCurrent()) return;
       }
 
+      for (const key of loadSeen()) {
+        const splitAt = key.lastIndexOf(":");
+        if (splitAt <= 0) continue;
+        if (key.slice(0, splitAt) !== lang.id) continue;
+        const id = Number(key.slice(splitAt + 1));
+        if (Number.isFinite(id)) seenPageIds.current.add(id);
+      }
+      if (pinned) seenPageIds.current.delete(pinned.pageid);
+
+      const loaded = await loadFeed({
+        lang,
+        topic: activeTopic,
+        signal: controller.signal,
+        hideSensitive: hideSensitiveRef.current,
+        seen: seenPageIds.current,
+        hidden: hiddenKeys.current,
+      });
       if (!stillCurrent()) return;
 
-      for (const article of collected) seenPageIds.current.add(article.pageid);
-      collected.slice(0, 4).forEach((article) => {
-        if (article.thumbnail?.source) void preloadImage(article.thumbnail.source);
-      });
+      const fresh = pinned
+        ? [pinned, ...loaded.articles.filter((article) => article.pageid !== pinned?.pageid)]
+        : loaded.articles;
+      remember(fresh);
 
-      if (reachedEnd) {
+      if (loaded.exhausted) {
         exhaustedRef.current = true;
         setExhausted(true);
       }
-      if (collected.length > 0) {
-        setArticles((prev) => [...prev, ...collected]);
-      } else if (!reachedEnd) {
-        const message = "Couldn't load articles. Check your connection and try again.";
+      if (fresh.length > 0) {
+        setArticles((prev) => {
+          const keys = new Set(prev.map((article) => likeKey(article)));
+          const next = fresh.filter((article) => !keys.has(likeKey(article)));
+          return [...prev, ...next];
+        });
+      } else if (!loaded.exhausted) {
+        const message = loaded.timedOut
+          ? "The Wikipedia request timed out. Try again."
+          : "Couldn't load articles. Check your connection and try again.";
         errorRef.current = message;
         setError(message);
       }
     } catch (error) {
       if (!stillCurrent()) return;
-      const timedOut = error instanceof Error && error.name === "AbortError";
+      const timedOut = error instanceof WikiRequestError && error.timedOut;
+      const aborted = error instanceof Error && error.name === "AbortError";
+      if (aborted && !timedOut) return;
       const message = timedOut
         ? "The Wikipedia request timed out. Try again."
         : "Couldn't load articles. Check your connection and try again.";
       errorRef.current = message;
       setError(message);
     } finally {
-      clearTimeout(timeout);
       if (stillCurrent()) {
         isFetchingRef.current = false;
         setLoading(false);
         setIsFetchingMore(false);
       }
     }
-  }, []);
+  }, [remember]);
 
   const resetAndFetch = useCallback(() => {
     generationRef.current += 1;
     abortRef.current?.abort();
     abortRef.current = null;
     seenPageIds.current = new Set();
-    offsetRef.current = 0;
+    hiddenKeys.current = new Set(loadHidden());
     exhaustedRef.current = false;
     errorRef.current = null;
     isFetchingRef.current = false;
@@ -264,13 +176,16 @@ export function useWikiArticles() {
   }, [fetchArticles]);
 
   useEffect(() => {
+    // The feed is external Wikipedia data. Changing language, topic, or the
+    // sensitive-content filter has to drop the old cards and start a new request.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     resetAndFetch();
     return () => {
       generationRef.current += 1;
       abortRef.current?.abort();
       isFetchingRef.current = false;
     };
-  }, [currentLanguage.id, topic, resetAndFetch]);
+  }, [currentLanguage.id, topic, hideSensitive, resetAndFetch]);
 
   const retry = useCallback(() => {
     errorRef.current = null;
@@ -282,6 +197,43 @@ export function useWikiArticles() {
     void fetchArticles(false);
   }, [fetchArticles]);
 
+  const openArticle = useCallback((article: WikiArticle) => {
+    setArticles((prev) => [article, ...prev.filter((item) => likeKey(item) !== likeKey(article))]);
+    seenPageIds.current.add(article.pageid);
+  }, []);
+
+  const dismissArticle = useCallback((article: WikiArticle) => {
+    const key = likeKey(article);
+    hiddenKeys.current.add(key);
+    rememberHidden(key);
+    setArticles((prev) => prev.filter((item) => likeKey(item) !== key));
+  }, []);
+
+  const loadRelated = useCallback(async (article: WikiArticle) => {
+    const controller = new AbortController();
+    const lang = languageFromId(article.lang) ?? languageRef.current;
+    const related = await fetchRelatedArticles(
+      lang,
+      article.title,
+      controller.signal,
+      hideSensitiveRef.current,
+      seenPageIds.current,
+      hiddenKeys.current
+    );
+    if (related.length === 0) return 0;
+    remember(related);
+    setArticles((prev) => {
+      const index = prev.findIndex((item) => likeKey(item) === likeKey(article));
+      const insertAt = index === -1 ? prev.length : index + 1;
+      const keys = new Set(prev.map((item) => likeKey(item)));
+      const fresh = related.filter((item) => !keys.has(likeKey(item)));
+      const next = prev.slice();
+      next.splice(insertAt, 0, ...fresh);
+      return next;
+    });
+    return related.length;
+  }, [remember]);
+
   return {
     articles,
     loading,
@@ -292,5 +244,8 @@ export function useWikiArticles() {
     setTopic,
     fetchArticles: loadMore,
     retry,
+    openArticle,
+    dismissArticle,
+    loadRelated,
   };
 }

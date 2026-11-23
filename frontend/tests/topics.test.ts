@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { LANGUAGES } from "../src/languages";
-import { hasOwnTopicTerms, topicSearchTerm } from "../src/lib/topics";
+import { hasOwnTopicTerms, topicDiscoveryQuery, topicSearchTerm } from "../src/lib/topics";
 
 describe("topicSearchTerm", () => {
   it("uses the language's own word instead of the English label", () => {
@@ -8,6 +8,13 @@ describe("topicSearchTerm", () => {
     expect(topicSearchTerm("history", "de")).toBe("Geschichte");
     expect(topicSearchTerm("art", "zh-tw")).toBe("藝術");
     expect(topicSearchTerm("science", "zh-cn")).toBe("科学");
+  });
+
+  it("uses Wikipedia topic labels instead of the chip text", () => {
+    expect(topicDiscoveryQuery("science")).toBe("articletopic:STEM");
+    expect(topicDiscoveryQuery("space")).toBe("articletopic:space");
+    expect(topicDiscoveryQuery("art")).toBe("articletopic:visual-arts");
+    expect(topicDiscoveryQuery("all")).toBeNull();
   });
 
   it("has a term for every selectable language", () => {

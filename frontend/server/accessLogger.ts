@@ -1,5 +1,5 @@
 import geoip from "geoip-lite";
-import { isPrivateIp } from "./clientIp.ts";
+import { isPrivateIp, redactIp } from "./clientIp.ts";
 
 export interface LogEntry {
   timestamp: string;
@@ -73,12 +73,12 @@ export function resolveGeoLocation(ip: string): string {
 
 /**
  * Formats a log entry into the standard colored terminal string.
- * Example: [2026-10-12T14:47:51.121Z] GET / 200 1ms - IP: 108.11.218.119 (Mechanicsburg, PA, US)
+ * Example: [2026-10-12T14:47:51.121Z] GET / 200 1ms - IP: 108.11.218.0 (Mechanicsburg, PA, US)
  */
 export function formatLogLine(entry: LogEntry): string {
   const statusColor = entry.status >= 400 ? "\x1b[31m" : "\x1b[32m";
   const reset = "\x1b[0m";
-  return `[${entry.timestamp}] ${entry.method} ${entry.path} ${statusColor}${entry.status}${reset} ${entry.durationMs}ms - IP: ${entry.ip} (${entry.location})`;
+  return `[${entry.timestamp}] ${entry.method} ${entry.path} ${statusColor}${entry.status}${reset} ${entry.durationMs}ms - IP: ${redactIp(entry.ip)} (${entry.location})`;
 }
 
 /**
@@ -108,7 +108,7 @@ export function logAccess(params: {
     path: sanitizedPath,
     status: params.status,
     durationMs: Math.max(0, params.durationMs),
-    ip: params.ip,
+    ip: redactIp(params.ip),
     location: sanitizedLocation,
     userAgent: sanitizedUserAgent,
   };

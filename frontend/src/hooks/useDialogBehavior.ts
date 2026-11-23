@@ -30,9 +30,9 @@ export function useDialogBehavior(
   dialogRef: RefObject<HTMLElement | null>
 ) {
   const onCloseRef = useRef(onClose);
-  onCloseRef.current = onClose;
 
   useEffect(() => {
+    onCloseRef.current = onClose;
     if (!active) return;
     const feed = document.getElementById("feed");
     if (feed) feed.style.overflow = "hidden";
@@ -80,5 +80,5 @@ export function useDialogBehavior(
       window.removeEventListener("keydown", onKey, true);
       previouslyFocused?.focus?.();
     };
-  }, [active, dialogRef]);
+  }, [active, dialogRef, onClose]);
 }

@@ -8,15 +8,19 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Languages,
 } from "lucide-react";
 import type { WikiArticle } from "./WikiCard";
 import { useLikedArticles } from "../hooks/useLikedArticles";
 import { useLocalization } from "../hooks/useLocalization";
 import { useDialogBehavior } from "../hooks/useDialogBehavior";
 import { useShareArticle } from "../hooks/useShareArticle";
-import { prepareWikipediaHtml } from "../lib/wikiHtml";
+import { extractGallery, extractOutline, prepareWikipediaHtml, titleFromWikiHref } from "../lib/wikiHtml";
 import { isRtlLanguage, languageFromId, languageIdFromArticle } from "../lib/language";
 import { prefersReducedMotion } from "../lib/motion";
+import { fetchArticlesByTitles, fetchLangLinks, type LangLink } from "../lib/wikiFeed";
+import { appArticleHref } from "../lib/variantUrl";
+import { looksSensitive } from "../lib/sensitive";
 
 interface WikiParseResponse {
   parse?: {
@@ -35,9 +39,20 @@ interface WikiParseResponse {
 interface ReaderModalProps {
   article: WikiArticle;
   onClose: () => void;
+  hideSensitive?: boolean;
+  topic?: string;
+  onOpenArticle?: (article: WikiArticle) => void;
 }
 
-export function ReaderModal({ article, onClose }: ReaderModalProps) {
+export function ReaderModal({
+  article: sourceArticle,
+  onClose,
+  hideSensitive = true,
+  topic = "all",
+  onOpenArticle,
+}: ReaderModalProps) {
+  const [override, setOverride] = useState<WikiArticle | null>(null);
+  const article = override ?? sourceArticle;
   const { toggleLike, isLiked } = useLikedArticles();
   const { currentLanguage } = useLocalization();
   const { message: shareMessage, share } = useShareArticle();
@@ -53,6 +68,9 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
   const [fullHtml, setFullHtml] = useState<string | null>(null);
   const [loadingFullText, setLoadingFullText] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [langLinks, setLangLinks] = useState<LangLink[]>([]);
+  const [showLangs, setShowLangs] = useState(false);
+  const [loadingLangs, setLoadingLangs] = useState(false);
 
   const [dragY, setDragY] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
@@ -171,11 +189,76 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
   };
 
   const handleShare = () => {
+    const shareUrl =
+      typeof window === "undefined"
+        ? article.url
+        : appArticleHref({
+            origin: window.location.origin,
+            path: window.location.pathname,
+            lang: article.lang || articleLanguageId,
+            topic,
+            pageid: article.pageid,
+          });
     void share({
       title: article.displaytitle,
       text: article.extract || "",
-      url: article.url,
+      url: shareUrl,
     });
+  };
+
+  const openFetched = (next: WikiArticle | undefined, failure: string) => {
+    if (!next) {
+      setLoadError(failure);
+      return;
+    }
+    setOverride(next);
+    setFullHtml(null);
+    setIsExpanded(false);
+    setLoadError(null);
+    setLangLinks([]);
+    setShowLangs(false);
+    onOpenArticle?.(next);
+    contentRef.current?.scrollTo({ top: 0 });
+  };
+
+  const openTitle = async (title: string, lang = articleLanguage) => {
+    setLoadingFullText(true);
+    setLoadError(null);
+    try {
+      const found = await fetchArticlesByTitles(lang, [title], AbortSignal.timeout(12_000), false);
+      openFetched(found[0], "That article couldn't be opened in WikiTok.");
+    } catch {
+      setLoadError("That article couldn't be opened in WikiTok.");
+    } finally {
+      setLoadingFullText(false);
+    }
+  };
+
+  const loadLanguages = async () => {
+    if (showLangs) {
+      setShowLangs(false);
+      return;
+    }
+    setShowLangs(true);
+    if (langLinks.length > 0) return;
+    setLoadingLangs(true);
+    try {
+      const links = await fetchLangLinks(articleLanguage, article.pageid, AbortSignal.timeout(12_000));
+      setLangLinks(links);
+    } catch {
+      setLangLinks([]);
+    } finally {
+      setLoadingLangs(false);
+    }
+  };
+
+  const openLanguage = (link: LangLink) => {
+    const lang = languageFromId(link.lang);
+    if (!lang) {
+      if (link.url) window.open(link.url, "_blank", "noopener,noreferrer");
+      return;
+    }
+    void openTitle(link.title, lang);
   };
 
   const fetchFullArticle = async () => {
@@ -225,18 +308,36 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
     }
   };
 
-  const onRichTextClick = (event: React.MouseEvent<HTMLDivElement>) => {
-    const anchor = (event.target as HTMLElement | null)?.closest("a");
-    const href = anchor?.getAttribute("href");
-    if (!anchor || !href?.startsWith("#")) return;
-    event.preventDefault();
-    const id = decodeURIComponent(href.slice(1));
+  const scrollToHeading = (id: string) => {
     const target = contentRef.current?.querySelector(`[id="${CSS.escape(id)}"]`);
     target?.scrollIntoView({
       behavior: prefersReducedMotion() ? "auto" : "smooth",
       block: "start",
     });
   };
+
+  const onRichTextClick = (event: React.MouseEvent<HTMLDivElement>) => {
+    const anchor = (event.target as HTMLElement | null)?.closest("a");
+    const href = anchor?.getAttribute("href");
+    if (!anchor || !href) return;
+    if (href.startsWith("#")) {
+      event.preventDefault();
+      try {
+        scrollToHeading(decodeURIComponent(href.slice(1)));
+      } catch {
+        // A malformed fragment stays on the current section.
+      }
+      return;
+    }
+    const title = titleFromWikiHref(href, article.url);
+    if (!title) return;
+    event.preventDefault();
+    void openTitle(title);
+  };
+
+  const outline = useMemo(() => (fullHtml ? extractOutline(fullHtml) : []), [fullHtml]);
+  const gallery = useMemo(() => (fullHtml ? extractGallery(fullHtml) : []), [fullHtml]);
+  const visibleLangLinks = langLinks.filter((link) => !hideSensitive || !looksSensitive(link.title));
 
   const initialParagraphs = useMemo(() => {
     return article.extract
@@ -401,6 +502,36 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
             {article.displaytitle}
           </h1>
 
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void loadLanguages()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/15 text-xs font-medium"
+            >
+              <Languages className="w-3.5 h-3.5" />
+              <span>Other languages</span>
+            </button>
+          </div>
+
+          {showLangs && (
+            <div className="flex flex-wrap gap-2">
+              {loadingLangs && <span className="text-xs text-white/50">Loading languages...</span>}
+              {!loadingLangs && visibleLangLinks.length === 0 && (
+                <span className="text-xs text-white/50">No other languages are linked.</span>
+              )}
+              {visibleLangLinks.map((link) => (
+                <button
+                  key={`${link.lang}-${link.title}`}
+                  type="button"
+                  onClick={() => openLanguage(link)}
+                  className="px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20 text-xs"
+                >
+                  {link.autonym}
+                </button>
+              ))}
+            </div>
+          )}
+
           {shareMessage && (
             <p role="status" className="text-xs text-white/70">
               {shareMessage}
@@ -423,6 +554,36 @@ export function ReaderModal({ article, onClose }: ReaderModalProps) {
                   <span>Show summary only</span>
                 </button>
               </div>
+
+              {outline.length > 0 && (
+                <nav aria-label="Contents" className="rounded-xl border border-white/10 bg-white/[0.03] p-3 space-y-1">
+                  {outline.map((heading) => (
+                    <button
+                      key={heading.id}
+                      type="button"
+                      onClick={() => scrollToHeading(heading.id)}
+                      className={`block text-start text-sm text-blue-300 hover:text-blue-200 ${
+                        heading.level === 3 ? "ps-4 text-xs" : "font-medium"
+                      }`}
+                    >
+                      {heading.text}
+                    </button>
+                  ))}
+                </nav>
+              )}
+
+              {gallery.length > 0 && (
+                <div className="flex gap-2 overflow-x-auto pb-1">
+                  {gallery.map((image) => (
+                    <img
+                      key={image.src}
+                      src={image.src}
+                      alt={image.alt}
+                      className="h-24 w-auto rounded-lg bg-white/5"
+                    />
+                  ))}
+                </div>
+              )}
 
               <div
                 className="wiki-content space-y-4"

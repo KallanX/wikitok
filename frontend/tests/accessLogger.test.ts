@@ -76,7 +76,7 @@ describe("accessLogger", () => {
         location: "Mechanicsburg, PA, US",
       });
       expect(line).toBe(
-        "[2026-10-12T14:47:51.121Z] GET / \x1b[32m200\x1b[0m 1ms - IP: 108.11.218.119 (Mechanicsburg, PA, US)"
+        "[2026-10-12T14:47:51.121Z] GET / \x1b[32m200\x1b[0m 1ms - IP: 108.11.218.0 (Mechanicsburg, PA, US)"
       );
     });
 

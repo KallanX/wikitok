@@ -1,11 +1,14 @@
 import { createContext, useContext } from "react";
-import type { WikiArticle } from "../components/WikiCard";
+import type { WikiArticle } from "../lib/article";
 import type { LikeIdentity } from "../lib/likeKey";
 
 export interface LikedArticlesContextType {
   likedArticles: WikiArticle[];
   toggleLike: (article: WikiArticle) => void;
   isLiked: (article: LikeIdentity) => boolean;
+  storageWarning: string | null;
+  setCollections: (article: LikeIdentity, collections: string[]) => void;
+  importLikes: (value: unknown) => number;
 }
 
 export const LikedArticlesContext = createContext<LikedArticlesContextType | undefined>(undefined);
